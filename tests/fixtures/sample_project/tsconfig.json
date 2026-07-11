@@ -1,0 +1,9 @@
+{
+  // sample tsconfig with path aliases
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["src/app/*"],
+    }
+  }
+}
