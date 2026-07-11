@@ -1,0 +1,1920 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Analyzer レポート</title>
+<style>
+/* ==== Design tokens ==== */
+:root{
+  --bg:#f5f6f8; --panel-bg:#ffffff; --border:#dde1e6; --border-soft:#e9ebef;
+  --text:#1b1f24; --text-muted:#5b6470; --accent:#0072B2; --accent-dark:#00527f;
+  --green:#1b7f42; --green-bg:#e6f4ea; --amber:#8a6100; --amber-bg:#fdf1d6;
+  --red:#c0392b; --red-bg:#fbe7e4; --grey:#6b7280; --grey-bg:#eef0f3;
+  --shadow:0 1px 2px rgba(20,20,30,0.06),0 1px 6px rgba(20,20,30,0.05);
+  --radius:8px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+}
+h1,h2,h3,h4{margin:0 0 8px 0; font-weight:600;}
+h2{font-size:16px; border-bottom:1px solid var(--border-soft); padding-bottom:6px; margin-bottom:12px;}
+h3{font-size:13px; color:var(--text-muted); margin-top:16px;}
+h4{font-size:12px; color:var(--text-muted); margin-top:10px;}
+table{border-collapse:collapse; width:100%;}
+.hidden{display:none !important;}
+.muted{color:var(--text-muted); font-size:12px;}
+
+/* ==== Loading overlay ==== */
+#loading-overlay{
+  position:fixed; inset:0; background:var(--bg); display:flex;
+  align-items:center; justify-content:center; z-index:1000;
+}
+.loading-box{text-align:center;}
+.spinner{
+  width:40px; height:40px; margin:0 auto 12px auto; border-radius:50%;
+  border:4px solid var(--border); border-top-color:var(--accent);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loading-box pre{
+  max-width:80vw; overflow:auto; text-align:left; background:var(--panel-bg);
+  border:1px solid var(--border); padding:10px; border-radius:var(--radius);
+}
+
+/* ==== Header / tabs ==== */
+header{
+  background:var(--panel-bg); border-bottom:1px solid var(--border);
+  padding:10px 20px; position:sticky; top:0; z-index:100;
+}
+header h1{font-size:17px; display:inline-block; margin-right:12px;}
+#header-subtitle{font-size:12px; color:var(--text-muted);}
+.tabs-nav{display:flex; gap:4px; margin-top:10px; flex-wrap:wrap;}
+.tab-btn{
+  border:1px solid transparent; background:transparent; padding:7px 14px;
+  font-size:13px; border-radius:6px 6px 0 0; cursor:pointer; color:var(--text-muted);
+}
+.tab-btn:hover{background:var(--grey-bg);}
+.tab-btn.active{color:var(--accent-dark); border-color:var(--border) var(--border) var(--panel-bg);
+  background:var(--panel-bg); font-weight:600; border-bottom:2px solid var(--accent);}
+main{padding:18px 20px 60px 20px;}
+.tab-panel{display:none;}
+.tab-panel.active{display:block;}
+
+/* ==== Cards / panels ==== */
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:10px; margin-bottom:16px;}
+.card{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px 14px; box-shadow:var(--shadow);
+}
+.card-value{font-size:22px; font-weight:700; color:var(--accent-dark);}
+.card-label{font-size:12px; color:var(--text-muted); margin-top:2px;}
+.panel{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:14px 16px; margin-bottom:16px; box-shadow:var(--shadow);
+}
+
+/* ==== Legend ==== */
+.legend{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; font-size:12px;}
+.legend-item{display:inline-flex; align-items:center; gap:5px;}
+.swatch{width:11px; height:11px; border-radius:3px; display:inline-block;}
+.legend-gradient{display:flex; align-items:center; gap:8px; font-size:11px; margin-top:6px; color:var(--text-muted);}
+.gradient-bar{width:160px; height:10px; border-radius:5px; border:1px solid var(--border);}
+.donut-center{font-size:13px; fill:var(--text);}
+
+/* ==== Tables ==== */
+.kv-table th{text-align:left; color:var(--text-muted); font-weight:500; padding:4px 10px 4px 0; vertical-align:top; width:180px;}
+.kv-table td{padding:4px 0;}
+.kv-table.small th{width:120px;}
+.table-scroll{overflow:auto; max-height:520px;}
+.data-table{font-size:12.5px;}
+.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:6px 10px; text-align:left; white-space:nowrap;}
+.data-table thead th{position:sticky; top:0; background:var(--panel-bg); z-index:1;}
+.sortable-th{cursor:pointer; user-select:none;}
+.sortable-th:hover{color:var(--accent-dark);}
+#files-metrics-table{min-width:1180px;}
+
+/* ==== Badges ==== */
+.badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600;}
+.badge-certain{background:var(--green-bg); color:var(--green);}
+.badge-inferred{background:var(--amber-bg); color:var(--amber);}
+.badge-review{background:var(--red-bg); color:var(--red);}
+.badge-parse_error{background:var(--red-bg); color:var(--red);}
+.badge-parse_partial{background:var(--amber-bg); color:var(--amber);}
+.badge-skipped_size{background:var(--grey-bg); color:var(--grey);}
+.badge-encoding_fallback{background:var(--grey-bg); color:var(--grey);}
+.badge-unresolved_import{background:var(--amber-bg); color:var(--amber);}
+
+/* ==== Toolbar / buttons ==== */
+.toolbar{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:10px;}
+.toolbar input[type=text],.toolbar input[type=number],.toolbar select{
+  padding:5px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:#fff;
+}
+.btn{
+  padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:#fff;
+  cursor:pointer; font-size:13px;
+}
+.btn:hover{background:var(--grey-bg);}
+.btn.active{background:var(--accent); color:#fff; border-color:var(--accent-dark);}
+.btn-primary{background:var(--accent); color:#fff; border-color:var(--accent-dark);}
+.btn-primary:hover{background:var(--accent-dark);}
+.note{font-size:12px; color:var(--text-muted); font-style:italic;}
+.error{background:var(--red-bg); color:var(--red); padding:8px 12px; border-radius:6px; margin-top:8px; font-size:13px;}
+
+/* ==== Dependency graph ==== */
+.graph-layout{display:grid; grid-template-columns:1fr 300px; gap:14px;}
+.graph-canvas-wrap{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  overflow:hidden; box-shadow:var(--shadow);
+}
+#graph-svg{display:block; width:100%;}
+.detail-panel{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px 14px; box-shadow:var(--shadow); max-height:660px; overflow:auto;
+}
+.detail-panel .hint{color:var(--text-muted); font-size:12.5px;}
+.dep-list{list-style:none; margin:4px 0; padding:0; font-size:12.5px;}
+.dep-list li{padding:2px 0; border-bottom:1px dashed var(--border-soft);}
+.dep-list.warn-list li{color:var(--red);}
+.symbol-list{list-style:none; margin:2px 0 6px 10px; padding:0; font-size:12px;}
+.node-circle.dimmed{opacity:0.15;}
+text.dimmed{opacity:0.15;}
+.node-circle.search-hit{stroke:#f4c20d !important; stroke-width:3px !important;}
+.node-label{fill:#2b2f36; font-family:inherit;}
+line.link-dashed{stroke-dasharray:4,3;}
+
+/* ==== Hierarchy ==== */
+.hierarchy-layout{display:grid; grid-template-columns:340px 1fr; gap:14px;}
+.tree-root,.tree-children{list-style:none; margin:0; padding-left:14px;}
+.tree-root{padding-left:0;}
+.tree-children.collapsed{display:none;}
+.tree-row{display:flex; align-items:center; gap:4px; padding:2px 0; font-size:12.5px;}
+.tree-toggle{width:14px; display:inline-block; color:var(--text-muted); text-align:center;}
+.tree-label{cursor:default;}
+.tree-leaf{color:var(--accent-dark);}
+#tree-container{max-height:560px; overflow:auto;}
+
+/* ==== Source viewer (影響範囲) ==== */
+.source-viewer{
+  font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:12.5px; line-height:1.6; background:#1e2128; color:#d7dbe0;
+  border-radius:var(--radius); max-height:520px; overflow:auto; border:1px solid var(--border);
+}
+.src-line{display:flex; white-space:pre; cursor:pointer;}
+.src-line:hover{background:rgba(255,255,255,0.08);}
+.src-lineno{
+  flex:0 0 50px; text-align:right; padding:0 10px; color:#6b7280; user-select:none;
+  border-right:1px solid rgba(255,255,255,0.08);
+}
+.src-code{padding:0 10px 0 12px; white-space:pre;}
+.src-line-selected{background:rgba(0,114,178,0.38);}
+.src-line-impact{background:rgba(192,57,43,0.38);}
+.src-line-dataflow{background:rgba(230,159,0,0.42);}
+.src-line-selected.src-line-dataflow{background:linear-gradient(90deg, rgba(0,114,178,0.38), rgba(230,159,0,0.42));}
+.affected-file-row{cursor:pointer; text-decoration:underline dotted; text-underline-offset:2px;}
+.affected-file-row:hover{color:var(--accent-dark);}
+#impact-file-filter{min-width:220px;}
+.src-legend{display:flex; flex-wrap:wrap; gap:12px; margin:6px 0 8px 0; font-size:11.5px; color:var(--text-muted);}
+.src-legend .swatch{width:12px; height:12px; border-radius:3px;}
+
+/* ==== Footer ==== */
+footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
+</style>
+</head>
+<body>
+
+<div id="loading-overlay">
+  <div class="loading-box">
+    <div class="spinner"></div>
+    <p>解析データを読み込んでいます…</p>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+<header>
+  <h1>Code Analyzer レポート</h1>
+  <span id="header-subtitle"></span>
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-tab="overview">概要</button>
+    <button class="tab-btn" data-tab="graph">依存グラフ</button>
+    <button class="tab-btn" data-tab="hierarchy">階層構造</button>
+    <button class="tab-btn" data-tab="metrics">メトリクス</button>
+    <button class="tab-btn" data-tab="impact">影響範囲</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ 概要 ============ -->
+  <section id="tab-overview" class="tab-panel active">
+    <div class="cards" id="overview-cards"></div>
+    <div class="panel">
+      <h2>言語別内訳</h2>
+      <svg id="lang-donut" width="280" height="280"></svg>
+      <div id="lang-legend" class="legend"></div>
+    </div>
+    <div class="panel">
+      <h2>解析メタデータ</h2>
+      <table id="meta-table" class="kv-table"></table>
+    </div>
+    <div class="panel">
+      <h2>診断 (パース失敗・スキップ・未解決インポート等)</h2>
+      <div class="table-scroll"><table id="diag-table" class="data-table"></table></div>
+    </div>
+  </section>
+
+  <!-- ============ 依存グラフ ============ -->
+  <section id="tab-graph" class="tab-panel">
+    <div class="toolbar">
+      <input type="text" id="graph-search" placeholder="ファイルパスを検索…">
+      <select id="graph-dir-filter"><option value="">すべてのディレクトリ</option></select>
+      <label><input type="checkbox" id="graph-ext-toggle"> 外部依存を表示</label>
+      <button id="graph-cycle-btn" class="btn">循環依存をハイライト</button>
+      <button id="graph-reset-btn" class="btn">表示をリセット</button>
+      <span id="graph-agg-note" class="note hidden"></span>
+    </div>
+    <div class="graph-layout">
+      <div class="graph-canvas-wrap"><svg id="graph-svg"></svg></div>
+      <aside id="graph-detail" class="detail-panel">
+        <p class="hint">ノードをクリックすると詳細が表示されます。ドラッグで移動、ホイールでズームできます。</p>
+      </aside>
+    </div>
+    <div id="graph-legend" class="legend"></div>
+  </section>
+
+  <!-- ============ 階層構造 ============ -->
+  <section id="tab-hierarchy" class="tab-panel">
+    <div class="hierarchy-layout">
+      <div class="panel tree-panel">
+        <h2>ディレクトリツリー</h2>
+        <div id="tree-container"></div>
+      </div>
+      <div class="panel treemap-panel">
+        <h2>ツリーマップ (サイズ = 実効LOC)</h2>
+        <div class="toolbar">
+          <label><input type="radio" name="treemap-color" value="cc" checked> CC最大で色分け</label>
+          <label><input type="radio" name="treemap-color" value="mi"> MIで色分け</label>
+        </div>
+        <svg id="treemap-svg"></svg>
+        <div id="treemap-legend" class="legend-gradient"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ メトリクス ============ -->
+  <section id="tab-metrics" class="tab-panel">
+    <div class="panel hidden" id="network-stats-panel">
+      <h2>ネットワーク統計</h2>
+      <div class="cards" id="network-stats-cards"></div>
+    </div>
+    <div class="panel">
+      <h2>ファイル別メトリクス（列見出しクリックでソート）</h2>
+      <div class="toolbar">
+        <button id="export-csv-btn" class="btn">CSVをダウンロード</button>
+        <button id="export-json-btn" class="btn">JSONをダウンロード</button>
+      </div>
+      <div class="table-scroll"><table id="files-metrics-table" class="data-table sortable"></table></div>
+    </div>
+    <div class="panel">
+      <h2>循環的複雑度ワースト20（関数/メソッド）</h2>
+      <div class="table-scroll"><table id="worst-cc-table" class="data-table"></table></div>
+    </div>
+    <div class="panel">
+      <h2>ファイル保守性指標 (MI) 分布</h2>
+      <svg id="mi-histogram" width="600" height="240"></svg>
+    </div>
+    <div class="panel">
+      <h2>循環依存一覧</h2>
+      <ul id="cycles-list" class="dep-list"></ul>
+    </div>
+  </section>
+
+  <!-- ============ 影響範囲 ============ -->
+  <section id="tab-impact" class="tab-panel">
+    <!-- mode (a): precomputed ImpactResult (DATA.impact present) -->
+    <div id="impact-precomputed" class="hidden"></div>
+
+    <!-- mode (b1): source-driven flow, used when DATA.sources has embedded files -->
+    <div id="impact-source-flow" class="hidden">
+      <div class="panel">
+        <h2>変更影響範囲の探索</h2>
+        <p class="muted">ファイルを選択し，下のソースコード中の行をクリック（Shift+クリックまたは2回目のクリックで範囲を拡張）して選択してから「影響範囲を解析」を実行してください。</p>
+        <div class="toolbar">
+          <input type="text" id="impact-file-filter" placeholder="ファイルを検索…" autocomplete="off">
+          <select id="impact-file-picker"></select>
+          <label>探索深度:
+            <input type="range" id="impact-depth-input" min="1" max="20" value="10">
+            <span id="impact-depth-value">10</span>
+          </label>
+        </div>
+        <div class="src-legend">
+          <span class="legend-item"><span class="swatch" style="background:rgba(0,114,178,0.8)"></span>選択範囲</span>
+          <span class="legend-item"><span class="swatch" style="background:rgba(192,57,43,0.8)"></span>影響コード</span>
+          <span class="legend-item"><span class="swatch" style="background:rgba(230,159,0,0.85)"></span>データフロー（使用箇所）</span>
+        </div>
+        <div class="toolbar">
+          <span id="impact-selection-label" class="muted"></span>
+          <button id="impact-range-clear-btn" class="btn">クリア</button>
+          <button id="impact-back-origin-btn" class="btn hidden">起点に戻る</button>
+          <button id="impact-run-btn" class="btn btn-primary">影響範囲を解析</button>
+        </div>
+        <div id="impact-viewer-filename" class="muted" style="margin-bottom:4px;"></div>
+        <div id="impact-source-viewer" class="source-viewer"></div>
+        <div id="impact-error" class="error hidden"></div>
+      </div>
+      <div id="impact-src-result"></div>
+    </div>
+
+    <!-- mode (b2): fallback UI when no sources are embedded at all -->
+    <div id="impact-interactive" class="hidden">
+      <div class="panel">
+        <h2>変更影響範囲の探索（インタラクティブ）</h2>
+        <p class="muted">ソースコードが埋め込まれていないため，ファイルと行番号を指定します（--embed-sources 付きで再生成するとコードビューアが利用できます）。クライアント側で逆依存（呼び出し元・インポート元）を探索します。</p>
+        <div class="toolbar">
+          <select id="impact-file-select"></select>
+          <input type="number" id="impact-line-input-fb" min="1" placeholder="開始行" style="width:100px">
+          <input type="number" id="impact-line-end-input-fb" min="1" placeholder="終了行(省略可)" style="width:120px">
+          <label>探索深度:
+            <input type="range" id="impact-depth-input-fb" min="1" max="20" value="10">
+            <span id="impact-depth-value-fb">10</span>
+          </label>
+          <button id="impact-run-btn-fb" class="btn btn-primary">影響範囲を解析</button>
+        </div>
+        <div id="impact-error-fb" class="error hidden"></div>
+      </div>
+      <div id="impact-result-fb"></div>
+    </div>
+  </section>
+</main>
+
+<footer>Code Analyzer &mdash; 完全オフライン自己完結型HTMLレポート（同梱ライブラリ: D3.js, ISC License）</footer>
+</div>
+
+<noscript>このレポートの閲覧にはJavaScriptが必要です。</noscript>
+
+<script>/*__D3_JS__*/</script>
+<script>window.__CA_B64__ = "__CA_DATA_B64_GZIP__";</script>
+<script>
+(function () {
+'use strict';
+
+/* =========================================================================
+ * Constants
+ * ========================================================================= */
+// Colorblind-safe categorical palette (Okabe & Ito, 2008).
+var LANG_COLORS = {
+  python: '#0072B2',
+  javascript: '#E69F00',
+  typescript: '#56B4E9',
+  c: '#009E73',
+  cpp: '#D55E00',
+  java: '#CC79A7'
+};
+var LANG_LABELS = {
+  python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript',
+  c: 'C', cpp: 'C++', java: 'Java'
+};
+var EXTERNAL_COLOR = '#8a8f98';
+var DEFAULT_LOC = 20;       // fallback node "size" when metrics.files[id].loc_code is absent
+var AGG_THRESHOLD = 800;    // default file-node count above which the dep graph aggregates by directory
+
+// Effective aggregation threshold: the CLI can override the default via
+// --max-nodes, which is stored in the payload as metrics.ui.max_nodes.
+function aggThreshold() {
+  return (DATA && DATA.metrics && DATA.metrics.ui && DATA.metrics.ui.max_nodes) || AGG_THRESHOLD;
+}
+
+var DIAG_LABELS = {
+  parse_error: 'パースエラー', parse_partial: '部分的成功',
+  skipped_size: 'サイズ超過スキップ', encoding_fallback: 'エンコーディングフォールバック',
+  unresolved_import: '未解決インポート'
+};
+
+/* =========================================================================
+ * Small utilities
+ * ========================================================================= */
+function byId(id) { return document.getElementById(id); }
+function qs(sel, root) { return (root || document).querySelector(sel); }
+function qsa(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// Renders "—" for missing/undefined/null values so the UI never shows
+// "undefined" / "NaN" when a metric is absent from the embedded data.
+function fmt(v) {
+  if (v === undefined || v === null || v === '') return '—';
+  if (typeof v === 'number') {
+    if (!isFinite(v)) return '—';
+    return Number.isInteger(v) ? v.toLocaleString('ja-JP')
+                                : v.toLocaleString('ja-JP', { maximumFractionDigits: 2 });
+  }
+  return String(v);
+}
+
+function topDir(path) {
+  var idx = path.indexOf('/');
+  return idx === -1 ? '(root)' : path.slice(0, idx);
+}
+
+/* =========================================================================
+ * Global state (populated once the embedded payload is decoded)
+ * ========================================================================= */
+var DATA = null;
+var FILES_BY_ID = new Map();
+var SYMBOLS_BY_ID = new Map();
+var IMPORT_EDGES = [];         // file -> file/external/unresolved
+var CALL_INHERIT_EDGES = [];   // symbol -> symbol (call, inherit)
+var REV_CALL_MAP = new Map();  // dst symbol id -> [edge, ...] (who calls/inherits dst)
+var REV_IMPORT_MAP = new Map(); // dst file id -> [edge, ...] (who imports dst)
+var renderedTabs = { overview: false, graph: false, hierarchy: false, metrics: false, impact: false };
+var graphNodesData = [];       // last rendered dep-graph nodes (used by cross-tab "jump to graph" links)
+
+function projectMetrics() { return (DATA.metrics && DATA.metrics.project) || {}; }
+function fileMetricsMap() { return (DATA.metrics && DATA.metrics.files) || {}; }
+function symbolMetricsMap() { return (DATA.metrics && DATA.metrics.symbols) || {}; }
+function cyclesList() { return (DATA.metrics && DATA.metrics.cycles) || []; }
+
+function getMetric(fileId, key, dflt) {
+  var m = fileMetricsMap()[fileId];
+  var v = m ? m[key] : undefined;
+  return (v === undefined || v === null) ? dflt : v;
+}
+
+function buildIndices() {
+  FILES_BY_ID = new Map(DATA.files.map(function (f) { return [f.id, f]; }));
+  SYMBOLS_BY_ID = new Map(DATA.symbols.map(function (s) { return [s.id, s]; }));
+  IMPORT_EDGES = DATA.edges.filter(function (e) { return e.kind === 'import'; });
+  CALL_INHERIT_EDGES = DATA.edges.filter(function (e) { return e.kind === 'call' || e.kind === 'inherit'; });
+  REV_CALL_MAP = new Map();
+  CALL_INHERIT_EDGES.forEach(function (e) {
+    if (!REV_CALL_MAP.has(e.dst)) REV_CALL_MAP.set(e.dst, []);
+    REV_CALL_MAP.get(e.dst).push(e);
+  });
+  REV_IMPORT_MAP = new Map();
+  IMPORT_EDGES.forEach(function (e) {
+    if (!REV_IMPORT_MAP.has(e.dst)) REV_IMPORT_MAP.set(e.dst, []);
+    REV_IMPORT_MAP.get(e.dst).push(e);
+  });
+}
+
+/* =========================================================================
+ * Embedded-data decompression (gzip -> base64, decoded client-side)
+ * ========================================================================= */
+async function decodeEmbeddedData(b64) {
+  var binStr = atob(b64);
+  var len = binStr.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+  var ds = new DecompressionStream('gzip');
+  var stream = new Blob([bytes]).stream().pipeThrough(ds);
+  var buf = await new Response(stream).arrayBuffer();
+  var text = new TextDecoder('utf-8').decode(buf);
+  return JSON.parse(text);
+}
+
+function showFatalError(err) {
+  var el = byId('loading-overlay');
+  el.innerHTML = '<div class="loading-box"><p>データの読み込みに失敗しました。'
+    + 'このレポートは DecompressionStream に対応した最新の Chrome / Safari / Firefox が必要です。</p>'
+    + '<pre>' + escapeHtml(String(err && err.stack || err)) + '</pre></div>';
+}
+
+/* =========================================================================
+ * Tabs
+ * ========================================================================= */
+function setupTabs() {
+  qsa('.tab-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { activateTab(btn.dataset.tab); });
+  });
+}
+
+function activateTab(name) {
+  qsa('.tab-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === name); });
+  qsa('.tab-panel').forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + name); });
+  if (!renderedTabs[name]) {
+    if (name === 'graph') renderGraphTab();
+    if (name === 'hierarchy') renderHierarchyTab();
+    if (name === 'metrics') renderMetricsTab();
+    if (name === 'impact') renderImpactTab();
+    renderedTabs[name] = true;
+  }
+}
+
+/* =========================================================================
+ * Bootstrap
+ * ========================================================================= */
+async function init() {
+  try {
+    DATA = await decodeEmbeddedData(window.__CA_B64__);
+  } catch (err) {
+    showFatalError(err);
+    return;
+  }
+  buildIndices();
+  byId('loading-overlay').classList.add('hidden');
+  byId('app').classList.remove('hidden');
+  byId('header-subtitle').textContent =
+    (DATA.meta.root || '') + '  ・  ' + (DATA.meta.generated_at || '') +
+    (DATA.meta.git_revision ? '  ・  ' + DATA.meta.git_revision : '');
+  setupTabs();
+  renderOverview();
+  renderedTabs.overview = true;
+}
+
+window.addEventListener('DOMContentLoaded', init);
+
+/* =========================================================================
+ * Tab: 概要 (Overview)
+ * ========================================================================= */
+function renderOverview() {
+  var proj = projectMetrics();
+  var cards = [
+    { label: 'ファイル数', value: fmt(proj.files !== undefined ? proj.files : DATA.files.length) },
+    { label: '総LOC (実効)', value: fmt(proj.loc_code) },
+    { label: '総LOC (物理)', value: fmt(proj.loc_total) },
+    { label: '関数/メソッド数', value: fmt(proj.functions) },
+    { label: 'クラス数', value: fmt(proj.classes) },
+    { label: '平均CC', value: fmt(proj.cc_avg) },
+    { label: '平均MI', value: fmt(proj.mi_avg) },
+    { label: '循環依存数', value: fmt(proj.cycles_count) },
+    { label: '警告/診断数', value: fmt((DATA.diagnostics || []).length) }
+  ];
+  byId('overview-cards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="card-value">' + escapeHtml(String(c.value)) +
+      '</div><div class="card-label">' + escapeHtml(c.label) + '</div></div>';
+  }).join('');
+
+  renderLangDonut(proj.languages || {});
+  renderMetaTable();
+  renderDiagTable();
+}
+
+function renderLangDonut(languages) {
+  var entries = Object.keys(languages).map(function (k) { return [k, (languages[k] && languages[k].files) || 0]; });
+  if (!entries.length || entries.every(function (e) { return e[1] === 0; })) {
+    var counts = {};
+    DATA.files.forEach(function (f) { counts[f.language] = (counts[f.language] || 0) + 1; });
+    entries = Object.keys(counts).map(function (k) { return [k, counts[k]]; });
+  }
+  var svg = d3.select('#lang-donut');
+  svg.selectAll('*').remove();
+  var w = 280, h = 280, r = Math.min(w, h) / 2 - 8;
+  var g = svg.append('g').attr('transform', 'translate(' + w / 2 + ',' + h / 2 + ')');
+  var pie = d3.pie().value(function (d) { return d[1]; }).sort(null);
+  var arc = d3.arc().innerRadius(r * 0.55).outerRadius(r);
+  var colorOf = function (d) { return LANG_COLORS[d[0]] || EXTERNAL_COLOR; };
+  var total = d3.sum(entries, function (d) { return d[1]; });
+
+  var paths = g.selectAll('path').data(pie(entries)).join('path')
+    .attr('d', arc)
+    .attr('fill', function (d) { return colorOf(d.data); })
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 1.5);
+  paths.append('title').text(function (d) { return d.data[0] + ': ' + d.data[1]; });
+
+  g.append('text').attr('text-anchor', 'middle').attr('dy', '0.35em')
+    .attr('class', 'donut-center').text(total + ' files');
+
+  byId('lang-legend').innerHTML = entries.map(function (e) {
+    return '<span class="legend-item"><span class="swatch" style="background:' + colorOf(e) + '"></span>' +
+      escapeHtml(LANG_LABELS[e[0]] || e[0]) + ' (' + e[1] + ')</span>';
+  }).join('');
+}
+
+function renderMetaTable() {
+  var m = DATA.meta || {};
+  var rows = [
+    ['ツールバージョン', m.tool_version],
+    ['解析対象ルート', m.root],
+    ['生成日時', m.generated_at],
+    ['Git リビジョン', m.git_revision || '—'],
+    ['除外パターン', (m.excludes || []).join(', ') || '—'],
+    ['包含パターン (--include)', (m.includes || []).join(', ') || '—'],
+    ['.gitignore を尊重', m.gitignore_respected ? 'はい' : 'いいえ'],
+    ['ファイル数', m.file_count],
+    ['パース失敗数', m.parse_failures],
+    ['未解決インポート数', m.unresolved_imports]
+  ];
+  byId('meta-table').innerHTML = rows.map(function (r) {
+    return '<tr><th>' + escapeHtml(r[0]) + '</th><td>' + escapeHtml(fmt(r[1])) + '</td></tr>';
+  }).join('');
+}
+
+function renderDiagTable() {
+  var diags = DATA.diagnostics || [];
+  var table = byId('diag-table');
+  if (!diags.length) { table.innerHTML = '<tr><td>診断はありません。</td></tr>'; return; }
+  var head = '<thead><tr><th>ファイル</th><th>種別</th><th>行</th><th>メッセージ</th></tr></thead>';
+  var body = '<tbody>' + diags.map(function (d) {
+    return '<tr><td>' + escapeHtml(d.file) + '</td><td><span class="badge badge-' + escapeHtml(d.kind) + '">' +
+      escapeHtml(DIAG_LABELS[d.kind] || d.kind) + '</span></td><td>' + (d.line || '—') + '</td><td>' +
+      escapeHtml(d.message) + '</td></tr>';
+  }).join('') + '</tbody>';
+  table.innerHTML = head + body;
+}
+
+/* =========================================================================
+ * Tab: 依存グラフ (Dependency graph)
+ * ========================================================================= */
+var graphState = {
+  cycleHighlight: false,
+  showExternal: false,
+  dirFilter: '',
+  searchTerm: '',
+  expandedDirs: new Set()
+};
+var graphSim = null;
+var graphRadius = d3.scaleSqrt();
+
+function renderGraphTab() {
+  populateDirFilter();
+  renderLangLegendFor('graph-legend');
+  wireGraphControls();
+  buildAndRenderGraph();
+}
+
+function populateDirFilter() {
+  var dirs = Array.from(new Set(DATA.files.map(function (f) { return topDir(f.path); }))).sort();
+  var sel = byId('graph-dir-filter');
+  dirs.forEach(function (d) {
+    var opt = document.createElement('option');
+    opt.value = d; opt.textContent = d;
+    sel.appendChild(opt);
+  });
+}
+
+function renderLangLegendFor(elId) {
+  var langs = Array.from(new Set(DATA.files.map(function (f) { return f.language; }))).sort();
+  var html = langs.map(function (l) {
+    return '<span class="legend-item"><span class="swatch" style="background:' + (LANG_COLORS[l] || EXTERNAL_COLOR) +
+      '"></span>' + escapeHtml(LANG_LABELS[l] || l) + '</span>';
+  }).join('');
+  html += '<span class="legend-item"><span class="swatch" style="background:' + EXTERNAL_COLOR +
+    '"></span>外部依存 / 集約ディレクトリ</span>';
+  byId(elId).innerHTML = html;
+}
+
+function wireGraphControls() {
+  byId('graph-search').addEventListener('input', function (e) {
+    graphState.searchTerm = e.target.value.trim().toLowerCase();
+    applyGraphFilters();
+  });
+  byId('graph-dir-filter').addEventListener('change', function (e) {
+    graphState.dirFilter = e.target.value;
+    applyGraphFilters();
+  });
+  byId('graph-ext-toggle').addEventListener('change', function (e) {
+    graphState.showExternal = e.target.checked;
+    buildAndRenderGraph();
+  });
+  byId('graph-cycle-btn').addEventListener('click', function () {
+    graphState.cycleHighlight = !graphState.cycleHighlight;
+    byId('graph-cycle-btn').classList.toggle('active', graphState.cycleHighlight);
+    applyCycleHighlight();
+  });
+  byId('graph-reset-btn').addEventListener('click', function () {
+    graphState.expandedDirs.clear();
+    graphState.searchTerm = ''; byId('graph-search').value = '';
+    graphState.dirFilter = ''; byId('graph-dir-filter').value = '';
+    buildAndRenderGraph();
+  });
+}
+
+function fileToNode(f) {
+  return { id: f.id, path: f.path, language: f.language, loc: getMetric(f.id, 'loc_code', DEFAULT_LOC), kind: 'file' };
+}
+
+// Builds the node/link set for the current toggles (external visibility,
+// directory expansion). Auto-aggregates into per-top-level-directory nodes
+// when the raw file count exceeds aggThreshold() (SPEC F7, --max-nodes).
+function computeGraphData() {
+  var totalFiles = DATA.files.length;
+  var willAggregate = totalFiles > aggThreshold();
+  var nodes = [];
+
+  if (willAggregate) {
+    var byDir = new Map();
+    DATA.files.forEach(function (f) {
+      var d = topDir(f.path);
+      if (!byDir.has(d)) byDir.set(d, []);
+      byDir.get(d).push(f);
+    });
+    byDir.forEach(function (files, dir) {
+      if (graphState.expandedDirs.has(dir)) {
+        files.forEach(function (f) { nodes.push(fileToNode(f)); });
+      } else {
+        var locSum = files.reduce(function (s, f) { return s + getMetric(f.id, 'loc_code', DEFAULT_LOC); }, 0);
+        var langCounts = {};
+        files.forEach(function (f) { langCounts[f.language] = (langCounts[f.language] || 0) + 1; });
+        var dominant = Object.keys(langCounts).sort(function (a, b) { return langCounts[b] - langCounts[a]; })[0];
+        nodes.push({
+          id: 'dir:' + dir, path: dir + '/ (' + files.length + ' files)', language: dominant,
+          loc: locSum, kind: 'dir', dir: dir, fileIds: files.map(function (f) { return f.id; })
+        });
+      }
+    });
+  } else {
+    nodes = DATA.files.map(fileToNode);
+  }
+
+  var fileToNodeId = new Map();
+  nodes.forEach(function (n) {
+    if (n.kind === 'file') fileToNodeId.set(n.id, n.id);
+    else if (n.kind === 'dir') n.fileIds.forEach(function (fid) { fileToNodeId.set(fid, n.id); });
+  });
+
+  var links = [];
+  var extNodeMap = new Map();
+  IMPORT_EDGES.forEach(function (e) {
+    var srcNodeId = fileToNodeId.get(e.src);
+    if (!srcNodeId) return;
+    var dstNodeId;
+    if (e.dst.indexOf('external:') === 0) {
+      if (!graphState.showExternal) return;
+      dstNodeId = e.dst;
+      if (!extNodeMap.has(dstNodeId)) {
+        extNodeMap.set(dstNodeId, {
+          id: dstNodeId, path: e.dst.slice('external:'.length), language: 'external',
+          loc: DEFAULT_LOC, kind: 'external'
+        });
+      }
+    } else if (e.dst.indexOf('unresolved:') === 0) {
+      return; // unresolved targets are not materialized as graph nodes
+    } else {
+      dstNodeId = fileToNodeId.get(e.dst);
+      if (!dstNodeId) return;
+    }
+    if (srcNodeId === dstNodeId) return;
+    links.push({ source: srcNodeId, target: dstNodeId, confidence: e.confidence, kind: e.kind, rawSrc: e.src, rawDst: e.dst });
+  });
+  nodes = nodes.concat(Array.from(extNodeMap.values()));
+  return { nodes: nodes, links: links, aggregated: willAggregate };
+}
+
+function computeCycleEdgeKeySet() {
+  var keys = new Set();
+  cyclesList().forEach(function (cyc) {
+    if (!cyc.length) return;
+    for (var i = 0; i < cyc.length; i++) {
+      keys.add(cyc[i] + '|' + cyc[(i + 1) % cyc.length]);
+    }
+  });
+  return keys;
+}
+function cycleKeyOf(link) {
+  var s = link.rawSrc || (link.source && link.source.id) || link.source;
+  var t = link.rawDst || (link.target && link.target.id) || link.target;
+  return s + '|' + t;
+}
+
+function buildAndRenderGraph() {
+  if (graphSim) graphSim.stop();
+  var data = computeGraphData();
+  graphNodesData = data.nodes;
+  var links = data.links;
+
+  var noteEl = byId('graph-agg-note');
+  noteEl.classList.toggle('hidden', !data.aggregated);
+  if (data.aggregated) {
+    noteEl.textContent = '(集約表示: ' + data.nodes.filter(function (n) { return n.kind === 'dir'; }).length +
+      ' ディレクトリ。ノードをクリックすると展開します)';
+  }
+
+  var svg = d3.select('#graph-svg');
+  svg.selectAll('*').remove();
+  var wrap = document.querySelector('.graph-canvas-wrap');
+  var width = (wrap && wrap.clientWidth) || 800;
+  var height = 620;
+  svg.attr('width', width).attr('height', height).attr('viewBox', '0 0 ' + width + ' ' + height);
+
+  var maxLoc = d3.max(data.nodes, function (d) { return d.loc; }) || 1;
+  graphRadius.domain([0, maxLoc]).range([5, 28]);
+
+  var container = svg.append('g').attr('class', 'graph-container');
+  var linkLayer = container.append('g').attr('class', 'links');
+  var nodeLayer = container.append('g').attr('class', 'nodes');
+  var labelLayer = container.append('g').attr('class', 'labels');
+
+  var zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', function (ev) {
+    container.attr('transform', ev.transform);
+  });
+  svg.call(zoom);
+
+  var cycleEdgeKeys = computeCycleEdgeKeySet();
+
+  var link = linkLayer.selectAll('line').data(links).join('line')
+    .attr('class', function (d) { return 'link' + (d.confidence === 'certain' ? '' : ' link-dashed'); })
+    .attr('stroke', function (d) {
+      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#c0392b' : '#b7bdc6';
+    })
+    .attr('stroke-width', function (d) {
+      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2;
+    });
+
+  var node = nodeLayer.selectAll('circle').data(data.nodes, function (d) { return d.id; }).join('circle')
+    .attr('r', function (d) { return graphRadius(d.loc); })
+    .attr('fill', function (d) { return d.kind === 'external' ? EXTERNAL_COLOR : (LANG_COLORS[d.language] || EXTERNAL_COLOR); })
+    .attr('stroke', function (d) { return d.kind === 'dir' ? '#333' : '#fff'; })
+    .attr('stroke-dasharray', function (d) { return d.kind === 'dir' ? '3,2' : null; })
+    .attr('stroke-width', 1.5)
+    .attr('class', 'node-circle')
+    .style('cursor', 'pointer')
+    .on('click', function (ev, d) { onNodeClick(d); })
+    .call(d3.drag()
+      .on('start', dragStarted)
+      .on('drag', dragged)
+      .on('end', dragEnded));
+  node.append('title').text(function (d) { return d.path; });
+
+  var label = labelLayer.selectAll('text').data(data.nodes, function (d) { return d.id; }).join('text')
+    .text(function (d) { return d.path.split('/').pop(); })
+    .attr('class', 'node-label')
+    .attr('dy', 4)
+    .attr('font-size', 10)
+    .style('pointer-events', 'none');
+
+  graphSim = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(70).strength(0.4))
+    .force('charge', d3.forceManyBody().strength(-160))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collide', d3.forceCollide().radius(function (d) { return graphRadius(d.loc) + 6; }))
+    .on('tick', function () {
+      link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
+          .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
+      node.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+      label.attr('x', function (d) { return d.x + graphRadius(d.loc) + 3; }).attr('y', function (d) { return d.y; });
+    });
+
+  function dragStarted(ev, d) { if (!ev.active) graphSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+  function dragged(ev, d) { d.fx = ev.x; d.fy = ev.y; }
+  function dragEnded(ev, d) { if (!ev.active) graphSim.alphaTarget(0); d.fx = null; d.fy = null; }
+
+  applyGraphFilters();
+}
+
+function applyCycleHighlight() {
+  var cycleEdgeKeys = computeCycleEdgeKeySet();
+  d3.selectAll('#graph-svg .links line')
+    .attr('stroke', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#c0392b' : '#b7bdc6'; })
+    .attr('stroke-width', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2; });
+}
+
+function nodeMatchesFilter(d) {
+  if (!graphState.dirFilter) return true;
+  if (d.kind === 'external') return true;
+  var nodeDir = d.kind === 'dir' ? d.dir : topDir(d.path);
+  return nodeDir === graphState.dirFilter;
+}
+function nodeMatchesSearch(d) {
+  if (!graphState.searchTerm) return false;
+  return d.path.toLowerCase().indexOf(graphState.searchTerm) !== -1;
+}
+function applyGraphFilters() {
+  d3.selectAll('#graph-svg .nodes circle')
+    .classed('dimmed', function (d) { return !nodeMatchesFilter(d); })
+    .classed('search-hit', nodeMatchesSearch);
+  d3.selectAll('#graph-svg .labels text')
+    .classed('dimmed', function (d) { return !nodeMatchesFilter(d); });
+}
+
+function onNodeClick(d) {
+  if (d.kind === 'dir') {
+    graphState.expandedDirs.add(d.dir);
+    buildAndRenderGraph();
+    return;
+  }
+  renderGraphDetail(d);
+}
+
+function renderGraphDetail(d) {
+  var panel = byId('graph-detail');
+  if (d.kind === 'external') {
+    var dependents = IMPORT_EDGES.filter(function (e) { return e.dst === d.id; }).map(function (e) { return e.src; });
+    panel.innerHTML = '<h3>' + escapeHtml(d.path) + '</h3><p class="muted">外部パッケージ</p>' +
+      '<h4>依存しているファイル (' + dependents.length + ')</h4>' +
+      '<ul class="dep-list">' + (dependents.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>';
+    return;
+  }
+  var file = FILES_BY_ID.get(d.id);
+  var m = fileMetricsMap()[d.id] || {};
+  var inbound = IMPORT_EDGES.filter(function (e) { return e.dst === d.id; }).map(function (e) { return e.src; });
+  var outbound = IMPORT_EDGES.filter(function (e) { return e.src === d.id; }).map(function (e) { return e.dst; });
+  var symbols = DATA.symbols.filter(function (s) { return s.file_id === d.id; });
+  panel.innerHTML =
+    '<h3>' + escapeHtml(d.path) + '</h3>' +
+    '<p class="muted">' + escapeHtml(LANG_LABELS[d.language] || d.language) + (file && file.is_test ? ' ・ テストコード' : '') + '</p>' +
+    '<table class="kv-table small">' +
+      '<tr><th>LOC(実効)</th><td>' + fmt(m.loc_code) + '</td></tr>' +
+      '<tr><th>LOC(コメント)</th><td>' + fmt(m.loc_comment) + '</td></tr>' +
+      '<tr><th>関数/メソッド数</th><td>' + fmt(m.functions) + '</td></tr>' +
+      '<tr><th>クラス数</th><td>' + fmt(m.classes) + '</td></tr>' +
+      '<tr><th>CC合計</th><td>' + fmt(m.cc_total) + '</td></tr>' +
+      '<tr><th>CC最大</th><td>' + fmt(m.cc_max) + '</td></tr>' +
+      '<tr><th>MI</th><td>' + fmt(m.mi) + '</td></tr>' +
+      '<tr><th>Fan-in</th><td>' + fmt(m.fan_in) + '</td></tr>' +
+      '<tr><th>Fan-out</th><td>' + fmt(m.fan_out) + '</td></tr>' +
+    '</table>' +
+    '<h4>依存元 (' + inbound.length + ')</h4>' +
+    '<ul class="dep-list">' + (inbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>' +
+    '<h4>依存先 (' + outbound.length + ')</h4>' +
+    '<ul class="dep-list">' + (outbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>' +
+    '<h4>シンボル (' + symbols.length + ')</h4>' +
+    '<ul class="dep-list">' + (symbols.map(function (s) {
+      return '<li>' + escapeHtml(s.name) + ' <span class="muted">(' + escapeHtml(s.kind) + ', L' + s.span.start_line + '-' + s.span.end_line + ')</span></li>';
+    }).join('') || '<li>—</li>') + '</ul>';
+}
+
+/* =========================================================================
+ * Tab: 階層構造 (Hierarchy: collapsible tree + treemap)
+ * ========================================================================= */
+function buildFileTree() {
+  var root = { name: '(root)', path: '', children: new Map(), fileId: null };
+  DATA.files.forEach(function (f) {
+    var parts = f.path.split('/');
+    var node = root;
+    var acc = '';
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      acc = acc ? acc + '/' + part : part;
+      var isLeaf = i === parts.length - 1;
+      if (!node.children.has(part)) {
+        node.children.set(part, { name: part, path: acc, children: new Map(), fileId: isLeaf ? f.id : null });
+      }
+      node = node.children.get(part);
+    }
+  });
+  return mapTreeNode(root);
+}
+function mapTreeNode(n) {
+  var children = Array.from(n.children.values()).map(mapTreeNode);
+  var obj = { name: n.name, path: n.path, fileId: n.fileId };
+  if (children.length) obj.children = children;
+  else obj.value = getMetric(n.fileId, 'loc_code', DEFAULT_LOC);
+  return obj;
+}
+
+function renderHierarchyTab() {
+  var treeData = buildFileTree();
+  renderTreeList(treeData);
+  wireTreemapControls();
+  renderTreemap(buildFileTree(), 'cc');
+}
+
+function renderTreeList(treeData) {
+  var root = d3.hierarchy(treeData, function (d) { return d.children; });
+  var container = byId('tree-container');
+  container.innerHTML = '';
+  var ul = document.createElement('ul');
+  ul.className = 'tree-root';
+  ul.appendChild(renderTreeNode(root, true));
+  container.appendChild(ul);
+}
+
+function renderTreeNode(node, expanded) {
+  var li = document.createElement('li');
+  var hasChildren = node.children && node.children.length;
+  var row = document.createElement('div');
+  row.className = 'tree-row';
+  var toggle = document.createElement('span');
+  toggle.className = 'tree-toggle';
+  toggle.textContent = hasChildren ? (expanded ? '▾' : '▸') : ' ';
+  row.appendChild(toggle);
+  var label = document.createElement('span');
+  label.className = 'tree-label' + (hasChildren ? '' : ' tree-leaf');
+  var m = node.data.fileId ? fileMetricsMap()[node.data.fileId] : null;
+  label.textContent = node.data.name + (m && m.loc_code !== undefined && m.loc_code !== null ? ' (' + m.loc_code + ' LOC)' : '');
+  row.appendChild(label);
+  li.appendChild(row);
+  if (hasChildren) {
+    var childUl = document.createElement('ul');
+    childUl.className = 'tree-children' + (expanded ? '' : ' collapsed');
+    node.children.forEach(function (c) { childUl.appendChild(renderTreeNode(c, false)); });
+    li.appendChild(childUl);
+    toggle.style.cursor = 'pointer';
+    var toggleFn = function () {
+      var collapsed = childUl.classList.toggle('collapsed');
+      toggle.textContent = collapsed ? '▸' : '▾';
+    };
+    toggle.addEventListener('click', toggleFn);
+    label.style.cursor = 'pointer';
+    label.addEventListener('click', toggleFn);
+  } else if (node.data.fileId) {
+    label.style.cursor = 'pointer';
+    label.title = 'クリックで依存グラフに移動';
+    label.addEventListener('click', function () {
+      var fid = node.data.fileId;
+      activateTab('graph');
+      setTimeout(function () {
+        var target = graphNodesData.find(function (n) { return n.id === fid; });
+        if (target) onNodeClick(target);
+      }, 50);
+    });
+  }
+  return li;
+}
+
+function wireTreemapControls() {
+  qsa('input[name="treemap-color"]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      var mode = qs('input[name="treemap-color"]:checked').value;
+      renderTreemap(buildFileTree(), mode);
+    });
+  });
+}
+
+function renderTreemap(treeData, mode) {
+  var svg = d3.select('#treemap-svg');
+  svg.selectAll('*').remove();
+  var wrap = document.querySelector('.treemap-panel');
+  var width = Math.max(320, ((wrap && wrap.clientWidth) || 600) - 20);
+  var height = 480;
+  svg.attr('width', width).attr('height', height);
+
+  var root = d3.hierarchy(treeData, function (d) { return d.children; })
+    .sum(function (d) { return d.value || 0; })
+    .sort(function (a, b) { return b.value - a.value; });
+  d3.treemap().size([width, height]).paddingInner(1).paddingOuter(2)(root);
+
+  var colorFn = buildTreemapColorFn(mode);
+
+  var leaf = svg.selectAll('g').data(root.leaves()).join('g')
+    .attr('transform', function (d) { return 'translate(' + d.x0 + ',' + d.y0 + ')'; });
+  var rect = leaf.append('rect')
+    .attr('width', function (d) { return Math.max(0, d.x1 - d.x0); })
+    .attr('height', function (d) { return Math.max(0, d.y1 - d.y0); })
+    .attr('fill', function (d) { return colorFn(d.data.fileId); })
+    .attr('stroke', '#fff')
+    .style('cursor', 'pointer')
+    .on('click', function (ev, d) {
+      var fid = d.data.fileId;
+      activateTab('graph');
+      setTimeout(function () {
+        var target = graphNodesData.find(function (n) { return n.id === fid; });
+        if (target) onNodeClick(target);
+      }, 50);
+    });
+  rect.append('title').text(function (d) {
+    return d.data.path + '\n' + (mode === 'cc' ? 'CC最大: ' + fmt(getMetric(d.data.fileId, 'cc_max', null))
+                                                 : 'MI: ' + fmt(getMetric(d.data.fileId, 'mi', null)));
+  });
+  leaf.append('text')
+    .attr('x', 3).attr('y', 12)
+    .attr('font-size', 9)
+    .attr('fill', '#fff')
+    .style('pointer-events', 'none')
+    .text(function (d) { return (d.x1 - d.x0) > 40 ? d.data.name : ''; });
+
+  renderTreemapLegend(mode);
+}
+
+function buildTreemapColorFn(mode) {
+  if (mode === 'mi') {
+    return function (fid) {
+      var v = getMetric(fid, 'mi', null);
+      if (v === null) return '#cccccc';
+      return d3.interpolateRdYlGn(Math.max(0, Math.min(1, v / 100)));
+    };
+  }
+  var maxCC = d3.max(DATA.files, function (f) { return getMetric(f.id, 'cc_max', 0); }) || 1;
+  return function (fid) {
+    var v = getMetric(fid, 'cc_max', null);
+    if (v === null) return '#cccccc';
+    return d3.interpolateOrRd(Math.max(0, Math.min(1, v / maxCC)));
+  };
+}
+
+function renderTreemapLegend(mode) {
+  var el = byId('treemap-legend');
+  if (mode === 'mi') {
+    el.innerHTML = '<span>MI低（悪い）</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
+      d3.interpolateRdYlGn(0) + ',' + d3.interpolateRdYlGn(0.5) + ',' + d3.interpolateRdYlGn(1) + ')"></div><span>MI高（良い）</span>';
+  } else {
+    el.innerHTML = '<span>CC低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
+      d3.interpolateOrRd(0) + ',' + d3.interpolateOrRd(1) + ')"></div><span>CC高</span>';
+  }
+}
+
+/* =========================================================================
+ * Tab: メトリクス (Metrics)
+ * ========================================================================= */
+var FILE_METRIC_COLUMNS = [
+  { key: 'path', label: 'パス' },
+  { key: 'language', label: '言語' },
+  { key: 'loc_code', label: 'LOC(実効)' },
+  { key: 'loc_comment', label: 'LOC(コメント)' },
+  { key: 'functions', label: '関数数' },
+  { key: 'classes', label: 'クラス数' },
+  { key: 'cc_total', label: 'CC合計' },
+  { key: 'cc_max', label: 'CC最大' },
+  { key: 'mi', label: 'MI' },
+  { key: 'fan_in', label: 'Fan-in' },
+  { key: 'fan_out', label: 'Fan-out' },
+  { key: 'pagerank', label: 'PageRank' },
+  { key: 'betweenness', label: '媒介中心性' },
+  { key: 'closeness', label: '近接中心性' },
+  { key: 'degree_centrality', label: '次数中心性' }
+];
+var filesMetricsSort = { key: 'path', dir: 1 };
+
+function buildFilesMetricsRows() {
+  var fm = fileMetricsMap();
+  return DATA.files.map(function (f) {
+    var m = fm[f.id] || {};
+    return {
+      id: f.id, path: f.path, language: LANG_LABELS[f.language] || f.language,
+      loc_code: m.loc_code, loc_comment: m.loc_comment, functions: m.functions, classes: m.classes,
+      cc_total: m.cc_total, cc_max: m.cc_max, mi: m.mi, fan_in: m.fan_in, fan_out: m.fan_out,
+      pagerank: m.pagerank, betweenness: m.betweenness, closeness: m.closeness,
+      degree_centrality: m.degree_centrality
+    };
+  });
+}
+
+function sortRows(rows, sortSpec) {
+  var key = sortSpec.key, dir = sortSpec.dir;
+  return rows.slice().sort(function (a, b) {
+    var av = a[key], bv = b[key];
+    var aMissing = (av === undefined || av === null);
+    var bMissing = (bv === undefined || bv === null);
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;   // missing values sort last regardless of direction
+    if (bMissing) return -1;
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return String(av).localeCompare(String(bv)) * dir;
+    }
+    return (av - bv) * dir;
+  });
+}
+
+function renderMetricsTab() {
+  renderNetworkStatsCard();
+  renderFilesMetricsTable();
+  renderWorstCcTable();
+  renderMiHistogram();
+  renderCyclesList();
+  wireMetricsExportButtons();
+}
+
+function renderNetworkStatsCard() {
+  var net = (DATA.metrics && DATA.metrics.network) || null;
+  var panel = byId('network-stats-panel');
+  if (!net) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  var cards = [
+    { label: 'ノード数', value: fmt(net.nodes) },
+    { label: 'エッジ数', value: fmt(net.edges) },
+    { label: '密度', value: fmt(net.density) },
+    { label: '平均次数', value: fmt(net.avg_degree) },
+    { label: '弱連結成分数', value: fmt(net.weakly_connected_components) },
+    { label: '最大成分サイズ', value: fmt(net.largest_component_size) }
+  ];
+  byId('network-stats-cards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="card-value">' + escapeHtml(String(c.value)) +
+      '</div><div class="card-label">' + escapeHtml(c.label) + '</div></div>';
+  }).join('');
+}
+
+/* ---- CSV / JSON export ---- */
+var METRICS_EXPORT_COLUMNS = [
+  'path', 'language', 'loc_total', 'loc_code', 'loc_comment', 'loc_blank',
+  'functions', 'classes', 'cc_total', 'cc_max', 'mi', 'fan_in', 'fan_out',
+  'fan_out_external', 'pagerank', 'betweenness', 'closeness', 'degree_centrality'
+];
+
+function csvEscapeField(v) {
+  if (v === undefined || v === null) return '';
+  var s = String(v);
+  if (/[",\r\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function sortedFilesByPath() {
+  return DATA.files.slice().sort(function (a, b) { return a.path.localeCompare(b.path); });
+}
+
+function buildMetricsCsv() {
+  var fm = fileMetricsMap();
+  var lines = [METRICS_EXPORT_COLUMNS.join(',')];
+  sortedFilesByPath().forEach(function (f) {
+    var m = fm[f.id] || {};
+    var row = METRICS_EXPORT_COLUMNS.map(function (col) {
+      if (col === 'path') return f.path;
+      if (col === 'language') return f.language;
+      return m[col];
+    });
+    lines.push(row.map(csvEscapeField).join(','));
+  });
+  return lines.join('\r\n') + '\r\n';
+}
+
+function buildMetricsJson() {
+  var fm = fileMetricsMap();
+  var files = sortedFilesByPath().map(function (f) {
+    var m = fm[f.id] || {};
+    var out = { path: f.path, language: f.language };
+    METRICS_EXPORT_COLUMNS.forEach(function (col) {
+      if (col === 'path' || col === 'language') return;
+      out[col] = m[col] !== undefined ? m[col] : null;
+    });
+    return out;
+  });
+  return JSON.stringify({
+    project: projectMetrics(),
+    network: (DATA.metrics && DATA.metrics.network) || null,
+    files: files,
+    cycles: cyclesList()
+  }, null, 2);
+}
+
+function downloadBlob(content, filename, mime) {
+  var blob = new Blob([content], { type: mime });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+}
+
+var metricsExportWired = false;
+function wireMetricsExportButtons() {
+  if (metricsExportWired) return;
+  metricsExportWired = true;
+  byId('export-csv-btn').addEventListener('click', function () {
+    downloadBlob(buildMetricsCsv(), 'metrics.csv', 'text/csv;charset=utf-8');
+  });
+  byId('export-json-btn').addEventListener('click', function () {
+    downloadBlob(buildMetricsJson(), 'metrics.json', 'application/json;charset=utf-8');
+  });
+}
+
+function renderFilesMetricsTable() {
+  var rows = sortRows(buildFilesMetricsRows(), filesMetricsSort);
+  var table = byId('files-metrics-table');
+  var thead = '<thead><tr>' + FILE_METRIC_COLUMNS.map(function (c) {
+    var arrow = filesMetricsSort.key === c.key ? (filesMetricsSort.dir === 1 ? ' ▲' : ' ▼') : '';
+    return '<th data-key="' + c.key + '" class="sortable-th">' + escapeHtml(c.label) + arrow + '</th>';
+  }).join('') + '</tr></thead>';
+  var tbody = '<tbody>' + rows.map(function (r) {
+    return '<tr>' + FILE_METRIC_COLUMNS.map(function (c) {
+      return '<td>' + escapeHtml(fmt(r[c.key])) + '</td>';
+    }).join('') + '</tr>';
+  }).join('') + '</tbody>';
+  table.innerHTML = thead + tbody;
+  qsa('th.sortable-th', table).forEach(function (th) {
+    th.addEventListener('click', function () {
+      var key = th.dataset.key;
+      if (filesMetricsSort.key === key) filesMetricsSort.dir *= -1;
+      else filesMetricsSort = { key: key, dir: 1 };
+      renderFilesMetricsTable();
+    });
+  });
+}
+
+function renderWorstCcTable() {
+  var sm = symbolMetricsMap();
+  var rows = DATA.symbols
+    .filter(function (s) { return s.kind === 'function' || s.kind === 'method'; })
+    .map(function (s) { return { s: s, m: sm[s.id] || {} }; })
+    .filter(function (r) { return r.m.cc !== undefined && r.m.cc !== null; })
+    .sort(function (a, b) { return b.m.cc - a.m.cc; })
+    .slice(0, 20);
+  var table = byId('worst-cc-table');
+  if (!rows.length) { table.innerHTML = '<tr><td>データがありません。</td></tr>'; return; }
+  var head = '<thead><tr><th>シンボル</th><th>ファイル</th><th>種別</th><th>CC</th><th>LOC</th><th>引数数</th></tr></thead>';
+  var body = '<tbody>' + rows.map(function (r) {
+    return '<tr><td>' + escapeHtml(r.s.name) + '</td><td>' + escapeHtml(r.s.file_id) + '</td><td>' +
+      escapeHtml(r.s.kind) + '</td><td>' + fmt(r.m.cc) + '</td><td>' + fmt(r.m.loc) + '</td><td>' + fmt(r.m.params) + '</td></tr>';
+  }).join('') + '</tbody>';
+  table.innerHTML = head + body;
+}
+
+function renderMiHistogram() {
+  var svg = d3.select('#mi-histogram');
+  svg.selectAll('*').remove();
+  var values = DATA.files.map(function (f) { return getMetric(f.id, 'mi', null); }).filter(function (v) { return v !== null; });
+  var width = 600, height = 240, margin = { top: 10, right: 10, bottom: 30, left: 36 };
+  svg.attr('width', width).attr('height', height);
+  if (!values.length) {
+    svg.append('text').attr('x', width / 2).attr('y', height / 2).attr('text-anchor', 'middle').text('データがありません');
+    return;
+  }
+  var x = d3.scaleLinear().domain([0, 100]).range([margin.left, width - margin.right]);
+  var bins = d3.bin().domain([0, 100]).thresholds(10)(values);
+  var y = d3.scaleLinear().domain([0, d3.max(bins, function (d) { return d.length; }) || 1]).range([height - margin.bottom, margin.top]);
+  var g = svg.append('g');
+  g.selectAll('rect').data(bins).join('rect')
+    .attr('x', function (d) { return x(d.x0) + 1; })
+    .attr('width', function (d) { return Math.max(0, x(d.x1) - x(d.x0) - 2); })
+    .attr('y', function (d) { return y(d.length); })
+    .attr('height', function (d) { return y(0) - y(d.length); })
+    .attr('fill', '#0072B2');
+  g.append('g').attr('transform', 'translate(0,' + (height - margin.bottom) + ')').call(d3.axisBottom(x).ticks(5));
+  g.append('g').attr('transform', 'translate(' + margin.left + ',0)').call(d3.axisLeft(y).ticks(5));
+}
+
+function renderCyclesList() {
+  var cycles = cyclesList();
+  var ul = byId('cycles-list');
+  if (!cycles.length) { ul.innerHTML = '<li>循環依存は検出されませんでした。</li>'; return; }
+  ul.innerHTML = cycles.map(function (c) {
+    var chain = c.concat([c[0]]).map(escapeHtml).join(' → ');
+    return '<li>' + chain + '</li>';
+  }).join('');
+}
+
+/* =========================================================================
+ * Tab: 影響範囲 (Impact)
+ * Three modes:
+ *   (a) DATA.impact is a precomputed ImpactResult (see core/model.py) -> render it.
+ *       If sources are embedded, its affected-file rows are also clickable.
+ *   (b1) DATA.impact is null but DATA.sources has embedded files ->
+ *        source-driven flow: pick a file, click/shift-click lines in the
+ *        viewer to select a range, run the traversal.
+ *   (b2) DATA.impact is null and no sources embedded -> legacy
+ *        file + line-number-input fallback UI.
+ * ========================================================================= */
+function hasEmbeddedSources() {
+  return !!(DATA.sources && Object.keys(DATA.sources).length);
+}
+function fileHasSource(fid) {
+  return !!(DATA.sources && Object.prototype.hasOwnProperty.call(DATA.sources, fid));
+}
+
+function renderImpactTab() {
+  if (DATA.impact) {
+    byId('impact-precomputed').classList.remove('hidden');
+    renderPrecomputedImpact(DATA.impact);
+  } else if (hasEmbeddedSources()) {
+    byId('impact-source-flow').classList.remove('hidden');
+    setupSourceFlowImpact();
+  } else {
+    byId('impact-interactive').classList.remove('hidden');
+    setupInteractiveImpact();
+  }
+}
+
+function confidenceBadge(conf) {
+  if (conf === 'certain') return '<span class="badge badge-certain">確実</span>';
+  if (conf === 'inferred') return '<span class="badge badge-inferred">推定</span>';
+  return '<span class="badge badge-review">要確認</span>';
+}
+
+function groupAffectedByHop(affectedFiles) {
+  var groups = new Map();
+  affectedFiles.forEach(function (af) {
+    var hops = (af.symbols || []).map(function (s) { return s.hops; }).filter(function (h) { return h !== undefined && h !== null; });
+    var minHop = hops.length ? Math.min.apply(null, hops) : 1;
+    if (!groups.has(minHop)) groups.set(minHop, []);
+    groups.get(minHop).push(af);
+  });
+  return Array.from(groups.entries()).sort(function (a, b) { return a[0] - b[0]; });
+}
+
+function renderAffectedFilesSection(affectedFiles, clickable) {
+  if (!affectedFiles.length) return '<div class="panel"><p>影響を受けるファイルはありません。</p></div>';
+  var groups = groupAffectedByHop(affectedFiles);
+  var html = '<div class="panel"><h2>影響を受けるファイル</h2>';
+  if (clickable) html += '<p class="note">ファイル名をクリックすると，そのファイルの影響コードをソースビューアに表示します（ソースが埋め込まれている場合）。</p>';
+  groups.forEach(function (g) {
+    var hop = g[0], files = g[1];
+    html += '<h3>ホップ ' + hop + '</h3><ul class="dep-list">';
+    files.forEach(function (af) {
+      var isClickable = clickable && fileHasSource(af.file_id);
+      var nameAttrs = isClickable
+        ? ' class="affected-file-row" data-file="' + escapeHtml(af.file_id) + '" title="クリックしてこのファイルのソースを表示"'
+        : '';
+      html += '<li><strong' + nameAttrs + '>' + escapeHtml(af.file_id) + '</strong><ul class="symbol-list">';
+      (af.symbols || []).forEach(function (s) {
+        html += '<li>' + escapeHtml(s.symbol_id) + ' ' + confidenceBadge(s.confidence) +
+          ' <span class="muted">via ' + escapeHtml(s.via || '—') + ', L' + (s.lines || []).join(',') + '</span></li>';
+      });
+      html += '</ul></li>';
+    });
+    html += '</ul>';
+  });
+  html += '</div>';
+  return html;
+}
+
+// Wires click handlers on ".affected-file-row" elements rendered by
+// renderAffectedFilesSection(..., true) so each row opens that file's
+// affected lines in a source viewer (ctx selects which viewer/back-button
+// pair to use: 'sf' = source-flow tab, 'pc' = precomputed-impact tab).
+function wireAffectedFileRows(rootEl, ctx, affectedFiles) {
+  qsa('.affected-file-row', rootEl).forEach(function (el) {
+    el.addEventListener('click', function () {
+      var fid = el.dataset.file;
+      var af = affectedFiles.find(function (a) { return a.file_id === fid; });
+      var lines = new Set();
+      ((af && af.symbols) || []).forEach(function (s) { (s.lines || []).forEach(function (l) { if (l) lines.add(l); }); });
+      if (ctx === 'sf') openSrcFlowAffectedFile(fid, lines);
+      else openPcAffectedFile(fid, lines);
+    });
+  });
+}
+
+var pcViewer = { originFileId: null, originStart: null, originEnd: null };
+
+function renderPrecomputedImpact(impact) {
+  var el = byId('impact-precomputed');
+  var origin = impact.origin || {};
+  var query = impact.query || {};
+  var stats = impact.stats || {};
+  var showViewer = hasEmbeddedSources();
+  var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
+    '<tr><th>ファイル</th><td>' + escapeHtml(query.file || '—') + '</td></tr>' +
+    '<tr><th>行</th><td>' + fmt(query.start_line) + (query.end_line && query.end_line !== query.start_line ? '-' + query.end_line : '') + '</td></tr>' +
+    '<tr><th>シンボル</th><td>' + escapeHtml(origin.symbol_name || '—') + ' (' + escapeHtml(origin.kind || '—') + ')</td></tr>' +
+    '<tr><th>探索深度</th><td>' + fmt(query.depth) + '</td></tr>' +
+    '<tr><th>影響ファイル数</th><td>' + fmt(stats.files) + '</td></tr>' +
+    '<tr><th>影響シンボル数</th><td>' + fmt(stats.symbols) + '</td></tr>' +
+    '<tr><th>最大深度到達</th><td>' + (stats.max_hops_reached ? 'はい（一部切り捨てられています）' : 'いいえ') + '</td></tr>' +
+    '</table></div>';
+  html += renderAffectedFilesSection(impact.affected_files || [], showViewer);
+  if (impact.unresolved_boundaries && impact.unresolved_boundaries.length) {
+    html += '<div class="panel"><h2>未解決境界 (Unresolved Boundaries)</h2><ul class="dep-list warn-list">' +
+      impact.unresolved_boundaries.map(function (b) {
+        return '<li>' + escapeHtml(b.symbol_id) + ' (L' + b.line + '): ' + escapeHtml(b.reason) + '</li>';
+      }).join('') + '</ul></div>';
+  }
+  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph"></svg></div>';
+  if (showViewer) {
+    html += '<div class="panel"><h2>ソースビューア</h2>' +
+      '<div class="toolbar"><span id="impact-pc-viewer-filename" class="muted"></span>' +
+      '<button id="impact-pc-back-btn" class="btn hidden">起点に戻る</button></div>' +
+      '<div id="impact-pc-viewer" class="source-viewer"></div></div>';
+  }
+  el.innerHTML = html;
+  var affectedFileIds = new Set((impact.affected_files || []).map(function (a) { return a.file_id; }));
+  if (query.file) affectedFileIds.add(query.file);
+  renderMiniGraph('impact-mini-graph', affectedFileIds);
+
+  if (showViewer) {
+    pcViewer.originFileId = query.file;
+    pcViewer.originStart = query.start_line;
+    pcViewer.originEnd = query.end_line || query.start_line;
+    wireAffectedFileRows(el, 'pc', impact.affected_files || []);
+    byId('impact-pc-back-btn').addEventListener('click', function () {
+      byId('impact-pc-back-btn').classList.add('hidden');
+      showPcOriginView();
+    });
+    if (pcViewer.originFileId && fileHasSource(pcViewer.originFileId)) {
+      showPcOriginView();
+    } else {
+      byId('impact-pc-viewer').innerHTML =
+        '<p class="muted">起点ファイルのソースは埋め込まれていません。上の一覧からファイルをクリックすると，' +
+        'そのファイルのソースが埋め込まれていれば表示されます。</p>';
+    }
+  }
+}
+
+function showPcOriginView() {
+  byId('impact-pc-viewer-filename').textContent = pcViewer.originFileId || '';
+  renderSourceViewerInto('impact-pc-viewer', null, pcViewer.originFileId, {
+    selectionRange: (pcViewer.originStart && pcViewer.originEnd) ? [pcViewer.originStart, pcViewer.originEnd] : null,
+    selectable: false
+  });
+}
+
+function openPcAffectedFile(fid, impactLines) {
+  byId('impact-pc-back-btn').classList.remove('hidden');
+  byId('impact-pc-viewer-filename').textContent = fid;
+  renderSourceViewerInto('impact-pc-viewer', null, fid, { impactLines: impactLines, selectable: false });
+}
+
+/* ---- Shared read-only/selectable source viewer renderer ----
+ * Renders `DATA.sources[fileId]` (line numbers + escaped code) into the
+ * element `containerId`. Optionally highlights a selection range, a set of
+ * "impact" lines, and a set of "dataflow" (def/use) lines with distinct
+ * colors (see .src-line-selected / .src-line-impact / .src-line-dataflow).
+ * When opts.selectable is set, clicking a line invokes opts.onSelect(lineNo,
+ * shiftKey) so callers can implement click / shift-click range selection.
+ */
+function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
+  opts = opts || {};
+  var container = byId(containerId);
+  if (filenameElId) byId(filenameElId).textContent = fileId || '';
+  if (!fileId || !fileHasSource(fileId)) {
+    container.innerHTML = '<p class="muted">このファイルのソースは埋め込まれていません。</p>';
+    container.onclick = null;
+    return;
+  }
+  var lines = DATA.sources[fileId].split(/\r\n|\r|\n/);
+  var selRange = opts.selectionRange || null;
+  var impactLines = opts.impactLines || new Set();
+  var dataflowLines = opts.dataflowLines || new Set();
+  container.innerHTML = lines.map(function (text, idx) {
+    var lineNo = idx + 1;
+    var cls = ['src-line'];
+    if (selRange && lineNo >= selRange[0] && lineNo <= selRange[1]) cls.push('src-line-selected');
+    if (impactLines.has(lineNo)) cls.push('src-line-impact');
+    if (dataflowLines.has(lineNo)) cls.push('src-line-dataflow');
+    return '<div class="' + cls.join(' ') + '" data-line="' + lineNo + '">' +
+      '<span class="src-lineno">' + lineNo + '</span><span class="src-code">' + escapeHtml(text) + '</span></div>';
+  }).join('');
+  if (opts.selectable && opts.onSelect) {
+    container.onclick = function (ev) {
+      var row = ev.target.closest ? ev.target.closest('.src-line') : null;
+      if (!row) return;
+      opts.onSelect(parseInt(row.dataset.line, 10), !!ev.shiftKey);
+    };
+  } else {
+    container.onclick = null;
+  }
+}
+
+function renderMiniGraph(svgId, highlightFileIds) {
+  var svg = d3.select('#' + svgId);
+  svg.selectAll('*').remove();
+  var width = 700, height = 420;
+  svg.attr('width', width).attr('height', height);
+  var nodes = DATA.files.map(function (f) {
+    return { id: f.id, path: f.path, language: f.language, loc: getMetric(f.id, 'loc_code', DEFAULT_LOC) };
+  });
+  var nodeIds = new Set(nodes.map(function (n) { return n.id; }));
+  var links = IMPORT_EDGES
+    .filter(function (e) { return nodeIds.has(e.src) && nodeIds.has(e.dst); })
+    .map(function (e) { return { source: e.src, target: e.dst, confidence: e.confidence }; });
+  var r = d3.scaleSqrt().domain([0, d3.max(nodes, function (d) { return d.loc; }) || 1]).range([3, 16]);
+  var container = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.2, 6]).on('zoom', function (ev) { container.attr('transform', ev.transform); }));
+  var link = container.append('g').selectAll('line').data(links).join('line')
+    .attr('stroke', '#c7ccd3').attr('stroke-width', 1);
+  var nodeSel = container.append('g').selectAll('circle').data(nodes).join('circle')
+    .attr('r', function (d) { return r(d.loc); })
+    .attr('fill', function (d) { return LANG_COLORS[d.language] || EXTERNAL_COLOR; })
+    .attr('opacity', function (d) { return highlightFileIds.has(d.id) ? 1 : 0.15; })
+    .attr('stroke', function (d) { return highlightFileIds.has(d.id) ? '#c0392b' : '#fff'; })
+    .attr('stroke-width', function (d) { return highlightFileIds.has(d.id) ? 2 : 1; });
+  nodeSel.append('title').text(function (d) { return d.path; });
+  var sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(50).strength(0.3))
+    .force('charge', d3.forceManyBody().strength(-100))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .on('tick', function () {
+      link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
+          .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
+      nodeSel.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+    });
+}
+
+/* ---- Shared traversal engine ----
+ * Finds every enclosing non-module symbol intersecting [startLine, endLine]
+ * (falls back to the file's module symbol when none intersect), seeds a
+ * reverse BFS from all of them combining symbol-level CALL/INHERIT edges
+ * and file-level IMPORT edges: hop 1 = certain, hop >= 2 = inferred; any
+ * edge flagged ambiguous or confidence=unresolved is shown as 要確認
+ * regardless of hop, mirroring core/model.py's Edge.ambiguous / Confidence
+ * contract. Also computes, from DATA.defuses (embedded alongside sources),
+ * the variables defined within the selected range ("sliced_vars") and the
+ * lines where those in-range defs are subsequently used ("dataflow_use_lines"),
+ * for the origin-file dataflow highlight.
+ */
+function findEnclosingSymbols(fileId, startLine, endLine) {
+  var cands = DATA.symbols.filter(function (s) {
+    return s.file_id === fileId && s.kind !== 'module' &&
+      s.span.start_line <= endLine && s.span.end_line >= startLine;
+  });
+  if (cands.length) return cands;
+  return DATA.symbols.filter(function (s) { return s.file_id === fileId && s.kind === 'module'; });
+}
+
+function computeSlicedVars(originSymbols, startLine, endLine) {
+  var defuses = DATA.defuses || [];
+  var originIds = new Set(originSymbols.map(function (s) { return s.id; }));
+  var vars = new Set();
+  var useLines = new Set();
+  defuses.forEach(function (du) {
+    if (!originIds.has(du.symbol_id)) return;
+    var defInRange = (du.def_lines || []).some(function (l) { return l >= startLine && l <= endLine; });
+    if (!defInRange) return;
+    vars.add(du.var);
+    (du.use_lines || []).forEach(function (l) { useLines.add(l); });
+  });
+  return { vars: Array.from(vars).sort(), useLines: useLines };
+}
+
+function tagConfidence(edge, hop) {
+  if (edge.ambiguous || edge.confidence === 'unresolved') return '要確認';
+  return hop === 1 ? 'certain' : 'inferred';
+}
+
+function traceImpact(fileId, startLine, endLine, depth) {
+  var originSymbols = findEnclosingSymbols(fileId, startLine, endLine);
+  var slice = computeSlicedVars(originSymbols, startLine, endLine);
+
+  var visitedSymbols = new Map();
+  originSymbols.forEach(function (s) { visitedSymbols.set(s.id, 0); });
+  var visitedFiles = new Map([[fileId, 0]]);
+  var affectedByFile = new Map();
+  var unresolvedBoundaries = [];
+  var symbolFrontier = originSymbols.map(function (s) { return s.id; });
+  var fileFrontier = [fileId];
+  var maxHopsReached = false;
+
+  function addAffected(fid, symbolId, line, confidence, via, hop) {
+    if (!affectedByFile.has(fid)) affectedByFile.set(fid, []);
+    affectedByFile.get(fid).push({ symbol_id: symbolId, lines: line ? [line] : [], confidence: confidence, via: via, hops: hop });
+  }
+
+  for (var hop = 1; hop <= depth; hop++) {
+    if (!symbolFrontier.length && !fileFrontier.length) break;
+    var nextSymbolFrontier = [];
+    var nextFileFrontier = [];
+
+    symbolFrontier.forEach(function (symId) {
+      var incoming = REV_CALL_MAP.get(symId) || [];
+      incoming.forEach(function (edge) {
+        var conf = tagConfidence(edge, hop);
+        var srcSym = SYMBOLS_BY_ID.get(edge.src);
+        if (!srcSym) {
+          unresolvedBoundaries.push({ symbol_id: edge.src, reason: '呼び出し元シンボルを解決できません', line: edge.line || 0 });
+          return;
+        }
+        if (!visitedSymbols.has(edge.src)) {
+          visitedSymbols.set(edge.src, hop);
+          nextSymbolFrontier.push(edge.src);
+          var srcFile = srcSym.file_id;
+          addAffected(srcFile, edge.src, edge.line, conf, edge.kind, hop);
+          if (!visitedFiles.has(srcFile)) {
+            visitedFiles.set(srcFile, hop);
+            nextFileFrontier.push(srcFile);
+          }
+        }
+      });
+    });
+    fileFrontier.forEach(function (fid) {
+      var incoming = REV_IMPORT_MAP.get(fid) || [];
+      incoming.forEach(function (edge) {
+        var conf = tagConfidence(edge, hop);
+        if (!visitedFiles.has(edge.src)) {
+          visitedFiles.set(edge.src, hop);
+          nextFileFrontier.push(edge.src);
+          addAffected(edge.src, '(module)', edge.line, conf, 'import', hop);
+        }
+      });
+    });
+    symbolFrontier = nextSymbolFrontier;
+    fileFrontier = nextFileFrontier;
+    if (hop === depth && (nextSymbolFrontier.length || nextFileFrontier.length)) maxHopsReached = true;
+  }
+
+  var affectedFiles = Array.from(affectedByFile.entries()).map(function (e) { return { file_id: e[0], symbols: e[1] }; });
+  return {
+    origin_symbols: originSymbols,
+    sliced_vars: slice.vars,
+    dataflow_use_lines: slice.useLines,
+    affected_files: affectedFiles,
+    unresolved_boundaries: unresolvedBoundaries,
+    stats: {
+      files: affectedFiles.length,
+      symbols: visitedSymbols.size - originSymbols.length,
+      max_hops_reached: maxHopsReached
+    }
+  };
+}
+
+function originSymbolLabel(result) {
+  return result.origin_symbols.map(function (s) { return s.name + '(' + s.kind + ')'; }).join(', ') || '—';
+}
+
+function impactResultHeaderRows(fileId, startLine, endLine, depth, result) {
+  return '<tr><th>ファイル</th><td>' + escapeHtml(fileId) + '</td></tr>' +
+    '<tr><th>選択範囲</th><td>L' + fmt(startLine) + (endLine !== startLine ? '–' + endLine : '') + '</td></tr>' +
+    '<tr><th>対象シンボル</th><td>' + escapeHtml(originSymbolLabel(result)) + '</td></tr>' +
+    '<tr><th>対象変数</th><td>' + escapeHtml(result.sliced_vars.length ? result.sliced_vars.join(', ') : '—') + '</td></tr>' +
+    '<tr><th>探索深度</th><td>' + fmt(depth) + '</td></tr>' +
+    '<tr><th>影響ファイル数</th><td>' + fmt(result.stats.files) + '</td></tr>' +
+    '<tr><th>影響シンボル数</th><td>' + fmt(result.stats.symbols) + '</td></tr>' +
+    '<tr><th>最大深度到達</th><td>' + (result.stats.max_hops_reached ? 'はい（一部切り捨てられています）' : 'いいえ') + '</td></tr>';
+}
+
+function unresolvedBoundariesHtml(list) {
+  if (!list.length) return '';
+  return '<div class="panel"><h2>未解決境界 (Unresolved Boundaries)</h2><ul class="dep-list warn-list">' +
+    list.map(function (b) { return '<li>' + escapeHtml(b.symbol_id) + ': ' + escapeHtml(b.reason) + '</li>'; }).join('') +
+    '</ul></div>';
+}
+
+/* ---- Mode (b1): source-driven flow ---- */
+var srcFlow = {
+  fileId: null, anchorLine: null, startLine: null, endLine: null, rangeComplete: false,
+  depth: 10, lastOrigin: null, lastDataflowFileId: null, lastDataflowLines: null
+};
+
+function setupSourceFlowImpact() {
+  var picker = byId('impact-file-picker');
+  var files = sortedFilesByPath();
+  picker.innerHTML = files.map(function (f) {
+    return '<option value="' + escapeHtml(f.id) + '">' + escapeHtml(f.path) +
+      (fileHasSource(f.id) ? '' : '  [ソース未埋込]') + '</option>';
+  }).join('');
+  byId('impact-file-filter').addEventListener('input', function (e) {
+    var term = e.target.value.trim().toLowerCase();
+    qsa('option', picker).forEach(function (opt) {
+      opt.classList.toggle('hidden', term !== '' && opt.textContent.toLowerCase().indexOf(term) === -1);
+    });
+  });
+  picker.addEventListener('change', function () { selectSrcFlowFile(picker.value); });
+  var depthInput = byId('impact-depth-input');
+  var depthValue = byId('impact-depth-value');
+  depthInput.addEventListener('input', function () {
+    depthValue.textContent = depthInput.value;
+    srcFlow.depth = parseInt(depthInput.value, 10) || 10;
+  });
+  byId('impact-range-clear-btn').addEventListener('click', clearSrcFlowRange);
+  byId('impact-back-origin-btn').addEventListener('click', backToSrcFlowOrigin);
+  byId('impact-run-btn').addEventListener('click', runSrcFlowImpact);
+  selectSrcFlowFile(files.length ? files[0].id : null);
+}
+
+function selectSrcFlowFile(fid) {
+  srcFlow.fileId = fid;
+  srcFlow.anchorLine = null; srcFlow.startLine = null; srcFlow.endLine = null; srcFlow.rangeComplete = false;
+  if (fid) byId('impact-file-picker').value = fid;
+  byId('impact-back-origin-btn').classList.add('hidden');
+  renderSrcFlowViewerState();
+}
+
+function renderSrcFlowViewerState() {
+  var fid = srcFlow.fileId;
+  if (!fid) {
+    byId('impact-viewer-filename').textContent = '';
+    byId('impact-source-viewer').innerHTML = '<p class="muted">ファイルを選択してください。</p>';
+    updateSrcFlowSelectionLabel();
+    return;
+  }
+  if (!fileHasSource(fid)) {
+    byId('impact-viewer-filename').textContent = fid;
+    byId('impact-source-viewer').innerHTML =
+      '<div style="padding:10px;"><p class="muted">このファイルのソースは埋め込まれていません。行番号を指定してください。</p>' +
+      '<div class="toolbar">' +
+      '<input type="number" id="impact-line-input-pf" min="1" placeholder="開始行" style="width:110px" value="' + (srcFlow.startLine || '') + '">' +
+      '<input type="number" id="impact-line-end-input-pf" min="1" placeholder="終了行(省略可)" style="width:130px" value="' + (srcFlow.endLine || '') + '">' +
+      '</div></div>';
+    updateSrcFlowSelectionLabel();
+    return;
+  }
+  var dataflow = (srcFlow.lastDataflowFileId === fid && srcFlow.lastDataflowLines) ? srcFlow.lastDataflowLines : new Set();
+  renderSourceViewerInto('impact-source-viewer', 'impact-viewer-filename', fid, {
+    selectionRange: (srcFlow.startLine && srcFlow.endLine) ? [srcFlow.startLine, srcFlow.endLine] : null,
+    dataflowLines: dataflow,
+    selectable: true,
+    onSelect: onSrcFlowLineClick
+  });
+  updateSrcFlowSelectionLabel();
+}
+
+function onSrcFlowLineClick(lineNo, shiftKey) {
+  if (srcFlow.anchorLine === null || (!shiftKey && srcFlow.rangeComplete)) {
+    srcFlow.anchorLine = lineNo; srcFlow.startLine = lineNo; srcFlow.endLine = lineNo; srcFlow.rangeComplete = false;
+  } else {
+    srcFlow.startLine = Math.min(srcFlow.anchorLine, lineNo);
+    srcFlow.endLine = Math.max(srcFlow.anchorLine, lineNo);
+    srcFlow.rangeComplete = true;
+  }
+  renderSrcFlowViewerState();
+}
+
+function updateSrcFlowSelectionLabel() {
+  var label = byId('impact-selection-label');
+  if (srcFlow.startLine && srcFlow.endLine) {
+    label.textContent = '選択範囲: L' + srcFlow.startLine + (srcFlow.endLine !== srcFlow.startLine ? '–' + srcFlow.endLine : '');
+  } else {
+    label.textContent = '行をクリックして選択範囲の開始を指定してください。';
+  }
+}
+
+function clearSrcFlowRange() {
+  srcFlow.anchorLine = null; srcFlow.startLine = null; srcFlow.endLine = null; srcFlow.rangeComplete = false;
+  renderSrcFlowViewerState();
+}
+
+function backToSrcFlowOrigin() {
+  byId('impact-back-origin-btn').classList.add('hidden');
+  var o = srcFlow.lastOrigin;
+  if (o) {
+    srcFlow.fileId = o.fileId;
+    if (fileHasSource(o.fileId)) byId('impact-file-picker').value = o.fileId;
+  }
+  renderSrcFlowViewerState();
+}
+
+function openSrcFlowAffectedFile(fid, impactLines) {
+  srcFlow.fileId = fid;
+  if (fileHasSource(fid)) byId('impact-file-picker').value = fid;
+  byId('impact-back-origin-btn').classList.remove('hidden');
+  renderSourceViewerInto('impact-source-viewer', 'impact-viewer-filename', fid, { impactLines: impactLines, selectable: false });
+  byId('impact-selection-label').textContent = escapeHtml(fid) + ' の影響コード（' + impactLines.size + ' 行）';
+}
+
+function runSrcFlowImpact() {
+  var errorEl = byId('impact-error');
+  errorEl.classList.add('hidden');
+  var fid = srcFlow.fileId;
+  var startLine, endLine;
+  if (fid && fileHasSource(fid)) {
+    startLine = srcFlow.startLine;
+    endLine = srcFlow.endLine;
+  } else if (fid) {
+    var sIn = byId('impact-line-input-pf');
+    var eIn = byId('impact-line-end-input-pf');
+    startLine = sIn ? parseInt(sIn.value, 10) : NaN;
+    endLine = (eIn && eIn.value) ? parseInt(eIn.value, 10) : startLine;
+  }
+  if (!fid || !isFinite(startLine) || startLine < 1) {
+    errorEl.textContent = 'ファイルと有効な行番号（範囲）を指定してください。';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!isFinite(endLine) || endLine < startLine) endLine = startLine;
+  var depth = srcFlow.depth || parseInt(byId('impact-depth-input').value, 10) || 10;
+  var result = traceImpact(fid, startLine, endLine, depth);
+  if (!result.origin_symbols.length) {
+    errorEl.textContent = '指定範囲を含むシンボル（関数/メソッド/クラス）が見つかりません。';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  srcFlow.lastOrigin = { fileId: fid, startLine: startLine, endLine: endLine };
+  srcFlow.lastDataflowFileId = fid;
+  srcFlow.lastDataflowLines = result.dataflow_use_lines;
+  if (srcFlow.fileId === fid) renderSrcFlowViewerState();
+  renderSrcFlowResult(fid, startLine, endLine, depth, result);
+}
+
+function renderSrcFlowResult(fileId, startLine, endLine, depth, result) {
+  var el = byId('impact-src-result');
+  var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
+    impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
+  html += renderAffectedFilesSection(result.affected_files, true);
+  html += unresolvedBoundariesHtml(result.unresolved_boundaries);
+  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-sf"></svg></div>';
+  el.innerHTML = html;
+  wireAffectedFileRows(el, 'sf', result.affected_files);
+  var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
+  highlighted.add(fileId);
+  renderMiniGraph('impact-mini-graph-sf', highlighted);
+}
+
+/* ---- Mode (b2): legacy fallback UI (no sources embedded at all) ---- */
+function setupInteractiveImpact() {
+  var select = byId('impact-file-select');
+  select.innerHTML = sortedFilesByPath()
+    .map(function (f) { return '<option value="' + escapeHtml(f.id) + '">' + escapeHtml(f.path) + '</option>'; }).join('');
+  var depthInput = byId('impact-depth-input-fb');
+  var depthValue = byId('impact-depth-value-fb');
+  depthInput.addEventListener('input', function () { depthValue.textContent = depthInput.value; });
+  byId('impact-run-btn-fb').addEventListener('click', runFallbackImpact);
+}
+
+function runFallbackImpact() {
+  var errorEl = byId('impact-error-fb');
+  errorEl.classList.add('hidden');
+  var fileId = byId('impact-file-select').value;
+  var startLine = parseInt(byId('impact-line-input-fb').value, 10);
+  var endRaw = byId('impact-line-end-input-fb').value;
+  var endLine = endRaw ? parseInt(endRaw, 10) : startLine;
+  var depth = parseInt(byId('impact-depth-input-fb').value, 10) || 10;
+  if (!fileId || !isFinite(startLine) || startLine < 1) {
+    errorEl.textContent = 'ファイルと有効な行番号を指定してください。';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!isFinite(endLine) || endLine < startLine) endLine = startLine;
+  var result = traceImpact(fileId, startLine, endLine, depth);
+  if (!result.origin_symbols.length) {
+    errorEl.textContent = '指定行を含むシンボル（関数/メソッド/クラス）が見つかりません（空行・コメント行、'
+      + 'またはファイルのモジュールスコープの可能性があります）。';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  renderFallbackImpactResult(fileId, startLine, endLine, depth, result);
+}
+
+function renderFallbackImpactResult(fileId, startLine, endLine, depth, result) {
+  var el = byId('impact-result-fb');
+  var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
+    impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
+  html += renderAffectedFilesSection(result.affected_files, false);
+  html += unresolvedBoundariesHtml(result.unresolved_boundaries);
+  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-fb"></svg></div>';
+  el.innerHTML = html;
+  var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
+  highlighted.add(fileId);
+  renderMiniGraph('impact-mini-graph-fb', highlighted);
+}
+
+})();
+</script>
+</body>
+</html>
+

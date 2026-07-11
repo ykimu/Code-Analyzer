@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-analyzer"
+version = "1.1.0"
+description = "Static analysis: dependency graphs, metrics, and change-impact visualization for Python/JS/TS/C/C++/Java"
+requires-python = ">=3.10"
+dependencies = [
+  "tree-sitter>=0.23",
+  "tree-sitter-python>=0.23",
+  "tree-sitter-javascript>=0.23",
+  "tree-sitter-typescript>=0.23",
+  "tree-sitter-c>=0.23",
+  "tree-sitter-cpp>=0.23",
+  "tree-sitter-java>=0.23",
+  "pathspec>=0.12",
+]
+
+[project.scripts]
+code-analyzer = "codeanalyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"codeanalyzer.report" = ["template/*"]
