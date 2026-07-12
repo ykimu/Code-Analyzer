@@ -5,13 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Code Analyzer レポート</title>
 <style>
-/* ==== Design tokens ==== */
+/* ==== Design tokens (white x green, WCAG AA) ==== */
 :root{
-  --bg:#f5f6f8; --panel-bg:#ffffff; --border:#dde1e6; --border-soft:#e9ebef;
-  --text:#1b1f24; --text-muted:#5b6470; --accent:#0072B2; --accent-dark:#00527f;
-  --green:#1b7f42; --green-bg:#e6f4ea; --amber:#8a6100; --amber-bg:#fdf1d6;
-  --red:#c0392b; --red-bg:#fbe7e4; --grey:#6b7280; --grey-bg:#eef0f3;
-  --shadow:0 1px 2px rgba(20,20,30,0.06),0 1px 6px rgba(20,20,30,0.05);
+  --bg:#FAFAF9; --panel-bg:#FFFFFF; --border:#E7E5E4; --border-soft:#E7E5E4; --border-strong:#D6D3D1; --border-input:#8E8984;
+  --text:#1C1917; --text-muted:#57534E;
+  --accent:#15803D; --accent-dark:#166534; --accent-active:#14532D;
+  --accent-tint:#F0FDF4; --accent-border:#BBF7D0; --focus:#16A34A;
+  --warn-text:#B45309; --warn-bg:#FFFBEB;
+  --danger-text:#B91C1C; --danger-bg:#FEF2F2;
+  --ok-text:#166534; --ok-bg:#DCFCE7;
+  /* legacy names kept for minimal-diff reuse across this file, remapped to the new palette */
+  --green:#15803D; --green-bg:#DCFCE7; --amber:#B45309; --amber-bg:#FEF3C7;
+  --red:#B91C1C; --red-bg:#FEF2F2; --grey:#57534E; --grey-bg:#F0EFED;
+  --shadow:0 1px 2px rgba(28,25,23,0.05),0 1px 6px rgba(28,25,23,0.05);
   --radius:8px;
 }
 *{box-sizing:border-box;}
@@ -19,14 +25,36 @@ html,body{margin:0;padding:0;}
 body{
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
   background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+  font-variant-numeric:tabular-nums;
 }
 h1,h2,h3,h4{margin:0 0 8px 0; font-weight:600;}
 h2{font-size:16px; border-bottom:1px solid var(--border-soft); padding-bottom:6px; margin-bottom:12px;}
 h3{font-size:13px; color:var(--text-muted); margin-top:16px;}
-h4{font-size:12px; color:var(--text-muted); margin-top:10px;}
+h4{font-size:12.5px; color:var(--text-muted); margin-top:10px;}
 table{border-collapse:collapse; width:100%;}
 .hidden{display:none !important;}
-.muted{color:var(--text-muted); font-size:12px;}
+.muted{color:var(--text-muted); font-size:12.5px;}
+
+/* ==== Accessibility primitives ==== */
+:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
+.visually-hidden{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+.skip-link{
+  position:absolute; left:8px; top:-48px; background:var(--accent); color:#fff;
+  padding:10px 16px; border-radius:var(--radius); z-index:1001; font-size:13px; font-weight:600;
+  text-decoration:none; transition:top .15s;
+}
+.skip-link:focus{top:8px;}
+#aria-live-region{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important; animation-duration:0.001ms !important; animation-iteration-count:1 !important;}
+  .spinner{animation:none !important; border-top-color:var(--border) !important;}
+}
 
 /* ==== Loading overlay ==== */
 #loading-overlay{
@@ -51,15 +79,17 @@ header{
   padding:10px 20px; position:sticky; top:0; z-index:100;
 }
 header h1{font-size:17px; display:inline-block; margin-right:12px;}
-#header-subtitle{font-size:12px; color:var(--text-muted);}
+#header-subtitle{font-size:12.5px; color:var(--text-muted);}
 .tabs-nav{display:flex; gap:4px; margin-top:10px; flex-wrap:wrap;}
 .tab-btn{
-  border:1px solid transparent; background:transparent; padding:7px 14px;
-  font-size:13px; border-radius:6px 6px 0 0; cursor:pointer; color:var(--text-muted);
+  border:1px solid transparent; background:transparent; padding:9px 16px; min-height:40px;
+  font-size:13px; font-weight:600; border-radius:8px 8px 0 0; cursor:pointer; color:var(--text-muted);
+  border-bottom:3px solid transparent;
 }
-.tab-btn:hover{background:var(--grey-bg);}
-.tab-btn.active{color:var(--accent-dark); border-color:var(--border) var(--border) var(--panel-bg);
-  background:var(--panel-bg); font-weight:600; border-bottom:2px solid var(--accent);}
+.tab-btn:hover{background:var(--grey-bg); color:var(--text);}
+.tab-btn:focus-visible{outline:2px solid var(--focus); outline-offset:-2px;}
+.tab-btn.active{color:var(--accent-active);
+  background:var(--panel-bg); font-weight:600; border-bottom:3px solid var(--accent);}
 main{padding:18px 20px 60px 20px;}
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
@@ -70,31 +100,40 @@ main{padding:18px 20px 60px 20px;}
   background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
   padding:12px 14px; box-shadow:var(--shadow);
 }
-.card-value{font-size:22px; font-weight:700; color:var(--accent-dark);}
-.card-label{font-size:12px; color:var(--text-muted); margin-top:2px;}
+.card-value{font-size:22px; font-weight:700; color:var(--accent-active); font-variant-numeric:tabular-nums;}
+.card-label{font-size:12.5px; color:var(--text-muted); margin-top:2px;}
 .panel{
   background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
   padding:14px 16px; margin-bottom:16px; box-shadow:var(--shadow);
 }
 
 /* ==== Legend ==== */
-.legend{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; font-size:12px;}
+.legend{display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; font-size:12.5px;}
 .legend-item{display:inline-flex; align-items:center; gap:5px;}
 .swatch{width:11px; height:11px; border-radius:3px; display:inline-block;}
-.legend-gradient{display:flex; align-items:center; gap:8px; font-size:11px; margin-top:6px; color:var(--text-muted);}
+.legend-gradient{display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:6px; color:var(--text-muted);}
 .gradient-bar{width:160px; height:10px; border-radius:5px; border:1px solid var(--border);}
 .donut-center{font-size:13px; fill:var(--text);}
+.tick text{font-size:12.5px; fill:var(--text-muted);}
+.tick line,.domain{stroke:var(--border-strong);}
 
 /* ==== Tables ==== */
-.kv-table th{text-align:left; color:var(--text-muted); font-weight:500; padding:4px 10px 4px 0; vertical-align:top; width:180px;}
-.kv-table td{padding:4px 0;}
+.kv-table th{text-align:left; color:var(--text-muted); font-weight:500; padding:5px 10px 5px 0; vertical-align:top; width:180px;}
+.kv-table td{padding:5px 0;}
 .kv-table.small th{width:120px;}
 .table-scroll{overflow:auto; max-height:520px;}
 .data-table{font-size:12.5px;}
-.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:6px 10px; text-align:left; white-space:nowrap;}
+.data-table caption{text-align:left;}
+.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:9px 10px; text-align:left; white-space:nowrap;}
 .data-table thead th{position:sticky; top:0; background:var(--panel-bg); z-index:1;}
 .sortable-th{cursor:pointer; user-select:none;}
-.sortable-th:hover{color:var(--accent-dark);}
+.sortable-th:hover{color:var(--accent-active);}
+button.sortable-th{
+  display:inline-flex; align-items:center; gap:4px; font:inherit; font-weight:600; color:var(--text-muted);
+  background:none; border:none; padding:0; margin:0; cursor:pointer; min-height:24px;
+}
+button.sortable-th:hover{color:var(--accent-active);}
+.sort-indicator{font-size:12.5px; color:var(--accent);}
 #files-metrics-table{min-width:1180px;}
 .data-table tr.row-highlight{background:var(--amber-bg) !important;}
 
@@ -102,14 +141,19 @@ main{padding:18px 20px 60px 20px;}
 .hotspot-scatter-wrap{position:relative;}
 .hotspot-tooltip{
   position:absolute; pointer-events:none; background:var(--text); color:#fff;
-  padding:5px 8px; border-radius:5px; font-size:11.5px; line-height:1.4; z-index:5; max-width:280px;
+  padding:5px 8px; border-radius:5px; font-size:12.5px; line-height:1.4; z-index:5; max-width:280px;
 }
 .hotspot-point{cursor:pointer; stroke:#fff; stroke-width:0.75px;}
 .hotspot-point:hover{stroke:var(--text); stroke-width:1.5px;}
+.hotspot-point:focus-visible{stroke:var(--focus); stroke-width:2px; outline:none;}
 
-/* ==== Badges ==== */
-.badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600;}
-.badge-certain{background:var(--green-bg); color:var(--green);}
+/* ==== Badges (color + icon + text triple encoding) ==== */
+.badge{
+  display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:999px;
+  font-size:12.5px; font-weight:600; line-height:1.6;
+}
+.badge svg{flex:none;}
+.badge-certain{background:var(--ok-bg); color:var(--ok-text);}
 .badge-inferred{background:var(--amber-bg); color:var(--amber);}
 .badge-review{background:var(--red-bg); color:var(--red);}
 .badge-parse_error{background:var(--red-bg); color:var(--red);}
@@ -121,18 +165,19 @@ main{padding:18px 20px 60px 20px;}
 /* ==== Toolbar / buttons ==== */
 .toolbar{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:10px;}
 .toolbar input[type=text],.toolbar input[type=number],.toolbar select{
-  padding:5px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px; background:#fff;
+  padding:8px 10px; min-height:40px; border:1px solid var(--border-input); border-radius:var(--radius);
+  font-size:13px; background:#fff; color:var(--text);
 }
 .btn{
-  padding:6px 12px; border-radius:6px; border:1px solid var(--border); background:#fff;
-  cursor:pointer; font-size:13px;
+  padding:8px 14px; min-height:40px; border-radius:var(--radius); border:1px solid var(--border-input); background:#fff;
+  cursor:pointer; font-size:13px; font-weight:600; color:var(--text);
 }
-.btn:hover{background:var(--grey-bg);}
-.btn.active{background:var(--accent); color:#fff; border-color:var(--accent-dark);}
-.btn-primary{background:var(--accent); color:#fff; border-color:var(--accent-dark);}
+.btn:hover{background:var(--bg);}
+.btn.active{background:var(--accent); color:#fff; border-color:var(--accent-active);}
+.btn-primary{background:var(--accent); color:#fff; border-color:var(--accent-active);}
 .btn-primary:hover{background:var(--accent-dark);}
-.note{font-size:12px; color:var(--text-muted); font-style:italic;}
-.error{background:var(--red-bg); color:var(--red); padding:8px 12px; border-radius:6px; margin-top:8px; font-size:13px;}
+.note{font-size:12.5px; color:var(--text-muted); font-style:italic;}
+.error{background:var(--danger-bg); color:var(--danger-text); padding:8px 12px; border-radius:var(--radius); margin-top:8px; font-size:13px;}
 
 /* ==== Dependency graph ==== */
 .graph-layout{display:grid; grid-template-columns:1fr 300px; gap:14px;}
@@ -149,11 +194,12 @@ main{padding:18px 20px 60px 20px;}
 .dep-list{list-style:none; margin:4px 0; padding:0; font-size:12.5px;}
 .dep-list li{padding:2px 0; border-bottom:1px dashed var(--border-soft);}
 .dep-list.warn-list li{color:var(--red);}
-.symbol-list{list-style:none; margin:2px 0 6px 10px; padding:0; font-size:12px;}
+.symbol-list{list-style:none; margin:2px 0 6px 10px; padding:0; font-size:12.5px;}
 .node-circle.dimmed{opacity:0.15;}
 text.dimmed{opacity:0.15;}
-.node-circle.search-hit{stroke:#f4c20d !important; stroke-width:3px !important;}
-.node-label{fill:#2b2f36; font-family:inherit;}
+.node-circle.search-hit{stroke:var(--focus) !important; stroke-width:3px !important;}
+.node-circle:focus-visible{outline:2px solid var(--focus); outline-offset:1px;}
+.node-label{fill:var(--text); font-family:inherit;}
 line.link-dashed{stroke-dasharray:4,3;}
 
 /* ==== Hierarchy ==== */
@@ -164,42 +210,45 @@ line.link-dashed{stroke-dasharray:4,3;}
 .tree-row{display:flex; align-items:center; gap:4px; padding:2px 0; font-size:12.5px;}
 .tree-toggle{width:14px; display:inline-block; color:var(--text-muted); text-align:center;}
 .tree-label{cursor:default;}
-.tree-leaf{color:var(--accent-dark);}
+.tree-leaf{color:var(--accent-active);}
 #tree-container{max-height:560px; overflow:auto;}
 
 /* ==== Source viewer (影響範囲) ==== */
 .source-viewer{
   font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
-  font-size:12.5px; line-height:1.6; background:#1e2128; color:#d7dbe0;
+  font-size:12.5px; line-height:1.6; background:#FCFCFB; color:var(--text);
   border-radius:var(--radius); max-height:520px; overflow:auto; border:1px solid var(--border);
 }
 .src-line{display:flex; white-space:pre; cursor:pointer;}
-.src-line:hover{background:rgba(255,255,255,0.08);}
+.src-line:hover{background:var(--bg);}
+.src-line:focus-visible{outline:2px solid var(--focus); outline-offset:-2px; position:relative; z-index:1;}
 .src-lineno{
-  flex:0 0 50px; text-align:right; padding:0 10px; color:#6b7280; user-select:none;
-  border-right:1px solid rgba(255,255,255,0.08);
+  flex:0 0 50px; text-align:right; padding:0 10px; color:#79716B; user-select:none;
+  border-right:1px solid var(--border); background:var(--bg);
 }
 .src-code{padding:0 10px 0 12px; white-space:pre;}
-.src-line-selected{background:rgba(0,114,178,0.38);}
-.src-line-impact{background:rgba(192,57,43,0.38);}
-.src-line-dataflow{background:rgba(230,159,0,0.42);}
-.src-line-selected.src-line-dataflow{background:linear-gradient(90deg, rgba(0,114,178,0.38), rgba(230,159,0,0.42));}
-.affected-file-row{cursor:pointer; text-decoration:underline dotted; text-underline-offset:2px;}
-.affected-file-row:hover{color:var(--accent-dark);}
+.src-line-selected{background:var(--accent-tint); box-shadow:inset 3px 0 0 var(--accent);}
+.src-line-impact{background:var(--danger-bg); box-shadow:inset 3px 0 0 var(--danger-text);}
+.src-line-dataflow{background:#FEF9C3; box-shadow:inset 3px 0 0 #CA8A04;}
+.src-line-selected.src-line-dataflow{background:linear-gradient(90deg, var(--accent-tint), #FEF9C3); box-shadow:inset 3px 0 0 var(--accent);}
+.affected-file-row{cursor:pointer; text-decoration:underline dotted; text-underline-offset:2px; background:none; border:none; font:inherit; color:inherit; padding:0;}
+.affected-file-row:hover{color:var(--accent-active);}
 #impact-file-filter{min-width:220px;}
-.src-legend{display:flex; flex-wrap:wrap; gap:12px; margin:6px 0 8px 0; font-size:11.5px; color:var(--text-muted);}
+.src-legend{display:flex; flex-wrap:wrap; gap:12px; margin:6px 0 8px 0; font-size:12.5px; color:var(--text-muted);}
 .src-legend .swatch{width:12px; height:12px; border-radius:3px;}
 
 /* ==== Footer ==== */
-footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
+footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:center;}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">本文へスキップ</a>
+<div id="aria-live-region" role="status" aria-live="polite"></div>
 
 <div id="loading-overlay">
   <div class="loading-box">
-    <div class="spinner"></div>
-    <p>解析データを読み込んでいます…</p>
+    <div class="spinner" aria-hidden="true"></div>
+    <p role="status" aria-live="polite">解析データを読み込んでいます...</p>
   </div>
 </div>
 
@@ -207,27 +256,27 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
 <header>
   <h1>Code Analyzer レポート</h1>
   <span id="header-subtitle"></span>
-  <nav class="tabs-nav">
-    <button class="tab-btn active" data-tab="overview">概要</button>
-    <button class="tab-btn" data-tab="graph">依存グラフ</button>
-    <button class="tab-btn" data-tab="hierarchy">階層構造</button>
-    <button class="tab-btn" data-tab="metrics">メトリクス</button>
-    <button class="tab-btn" data-tab="impact">影響範囲</button>
+  <nav class="tabs-nav" role="tablist" aria-label="レポートのセクション">
+    <button class="tab-btn active" data-tab="overview" role="tab" id="tabbtn-overview" aria-selected="true" aria-controls="tab-overview" tabindex="0">概要</button>
+    <button class="tab-btn" data-tab="graph" role="tab" id="tabbtn-graph" aria-selected="false" aria-controls="tab-graph" tabindex="-1">依存グラフ</button>
+    <button class="tab-btn" data-tab="hierarchy" role="tab" id="tabbtn-hierarchy" aria-selected="false" aria-controls="tab-hierarchy" tabindex="-1">階層構造</button>
+    <button class="tab-btn" data-tab="metrics" role="tab" id="tabbtn-metrics" aria-selected="false" aria-controls="tab-metrics" tabindex="-1">メトリクス</button>
+    <button class="tab-btn" data-tab="impact" role="tab" id="tabbtn-impact" aria-selected="false" aria-controls="tab-impact" tabindex="-1">影響範囲</button>
   </nav>
 </header>
 
-<main>
+<main id="main">
   <!-- ============ 概要 ============ -->
-  <section id="tab-overview" class="tab-panel active">
+  <section id="tab-overview" class="tab-panel active" role="tabpanel" aria-labelledby="tabbtn-overview" tabindex="0">
     <div class="cards" id="overview-cards"></div>
     <div class="panel">
       <h2>言語別内訳</h2>
-      <svg id="lang-donut" width="280" height="280"></svg>
+      <svg id="lang-donut" width="280" height="280" role="img"></svg>
       <div id="lang-legend" class="legend"></div>
     </div>
     <div class="panel">
       <h2>解析メタデータ</h2>
-      <table id="meta-table" class="kv-table"></table>
+      <table id="meta-table" class="kv-table"><caption class="visually-hidden">解析メタデータ</caption></table>
     </div>
     <div class="panel">
       <h2>診断 (パース失敗・スキップ・未解決インポート等)</h2>
@@ -236,17 +285,19 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </section>
 
   <!-- ============ 依存グラフ ============ -->
-  <section id="tab-graph" class="tab-panel">
+  <section id="tab-graph" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-graph" tabindex="0">
     <div class="toolbar">
+      <label class="visually-hidden" for="graph-search">ファイルパスを検索</label>
       <input type="text" id="graph-search" placeholder="ファイルパスを検索…">
+      <label class="visually-hidden" for="graph-dir-filter">ディレクトリで絞り込み</label>
       <select id="graph-dir-filter"><option value="">すべてのディレクトリ</option></select>
       <label><input type="checkbox" id="graph-ext-toggle"> 外部依存を表示</label>
-      <button id="graph-cycle-btn" class="btn">循環依存をハイライト</button>
+      <button id="graph-cycle-btn" class="btn" aria-pressed="false">循環依存をハイライト</button>
       <button id="graph-reset-btn" class="btn">表示をリセット</button>
       <span id="graph-agg-note" class="note hidden"></span>
     </div>
     <div class="graph-layout">
-      <div class="graph-canvas-wrap"><svg id="graph-svg"></svg></div>
+      <div class="graph-canvas-wrap"><svg id="graph-svg" role="img"></svg></div>
       <aside id="graph-detail" class="detail-panel">
         <p class="hint">ノードをクリックすると詳細が表示されます。ドラッグで移動、ホイールでズームできます。</p>
       </aside>
@@ -255,7 +306,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </section>
 
   <!-- ============ 階層構造 ============ -->
-  <section id="tab-hierarchy" class="tab-panel">
+  <section id="tab-hierarchy" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-hierarchy" tabindex="0">
     <div class="hierarchy-layout">
       <div class="panel tree-panel">
         <h2>ディレクトリツリー</h2>
@@ -268,23 +319,23 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
           <label><input type="radio" name="treemap-color" value="mi"> MIで色分け</label>
           <label id="treemap-hotspot-option" class="hidden"><input type="radio" name="treemap-color" value="hotspot"> ホットスポットで色分け</label>
         </div>
-        <svg id="treemap-svg"></svg>
+        <svg id="treemap-svg" role="img"></svg>
         <div id="treemap-legend" class="legend-gradient"></div>
       </div>
     </div>
   </section>
 
   <!-- ============ メトリクス ============ -->
-  <section id="tab-metrics" class="tab-panel">
+  <section id="tab-metrics" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-metrics" tabindex="0">
     <div class="panel hidden" id="network-stats-panel">
       <h2>ネットワーク統計</h2>
       <div class="cards" id="network-stats-cards"></div>
     </div>
     <div class="panel hidden" id="hotspot-panel">
       <h2>ホットスポット（複雑度 × 変更頻度）</h2>
-      <p class="muted">円の大きさ = 実効LOC，色 = ホットスポットスコア（0〜1）。点をクリックすると下のファイル別メトリクス表内の該当行がハイライトされます。</p>
+      <p class="muted">円の大きさ = 実効LOC，色 = ホットスポットスコア（0-1）。点をクリックすると下のファイル別メトリクス表内の該当行がハイライトされます。</p>
       <div class="hotspot-scatter-wrap">
-        <svg id="hotspot-scatter-svg"></svg>
+        <svg id="hotspot-scatter-svg" role="img"></svg>
         <div id="hotspot-tooltip" class="hotspot-tooltip hidden"></div>
       </div>
       <div class="legend-gradient" id="hotspot-scatter-legend"></div>
@@ -305,7 +356,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
     </div>
     <div class="panel">
       <h2>ファイル保守性指標 (MI) 分布</h2>
-      <svg id="mi-histogram" width="600" height="240"></svg>
+      <svg id="mi-histogram" width="600" height="240" role="img"></svg>
     </div>
     <div class="panel">
       <h2>循環依存一覧</h2>
@@ -314,7 +365,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </section>
 
   <!-- ============ 影響範囲 ============ -->
-  <section id="tab-impact" class="tab-panel">
+  <section id="tab-impact" class="tab-panel" role="tabpanel" aria-labelledby="tabbtn-impact" tabindex="0">
     <!-- mode (a): precomputed ImpactResult (DATA.impact present) -->
     <div id="impact-precomputed" class="hidden"></div>
 
@@ -322,9 +373,11 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
     <div id="impact-source-flow" class="hidden">
       <div class="panel">
         <h2>変更影響範囲の探索</h2>
-        <p class="muted">ファイルを選択し，下のソースコード中の行をクリック（Shift+クリックまたは2回目のクリックで範囲を拡張）して選択してから「影響範囲を解析」を実行してください。</p>
+        <p class="muted">ファイルを選択し，下のソースコード中の行をクリック（Shift+クリックまたは2回目のクリックで範囲を拡張）して選択してから「影響範囲を解析」を実行してください。キーボードではソースビューア内で矢印キーとShift+Spaceを使用できます。</p>
         <div class="toolbar">
+          <label class="visually-hidden" for="impact-file-filter">ファイルを検索</label>
           <input type="text" id="impact-file-filter" placeholder="ファイルを検索…" autocomplete="off">
+          <label class="visually-hidden" for="impact-file-picker">対象ファイル</label>
           <select id="impact-file-picker"></select>
           <label>探索深度:
             <input type="range" id="impact-depth-input" min="1" max="20" value="10">
@@ -332,9 +385,9 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
           </label>
         </div>
         <div class="src-legend">
-          <span class="legend-item"><span class="swatch" style="background:rgba(0,114,178,0.8)"></span>選択範囲</span>
-          <span class="legend-item"><span class="swatch" style="background:rgba(192,57,43,0.8)"></span>影響コード</span>
-          <span class="legend-item"><span class="swatch" style="background:rgba(230,159,0,0.85)"></span>データフロー（使用箇所）</span>
+          <span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>選択範囲</span>
+          <span class="legend-item"><span class="swatch" style="background:var(--danger-text)"></span>影響コード</span>
+          <span class="legend-item"><span class="swatch" style="background:#CA8A04"></span>データフロー（使用箇所）</span>
         </div>
         <div class="toolbar">
           <span id="impact-selection-label" class="muted"></span>
@@ -343,7 +396,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
           <button id="impact-run-btn" class="btn btn-primary">影響範囲を解析</button>
         </div>
         <div id="impact-viewer-filename" class="muted" style="margin-bottom:4px;"></div>
-        <div id="impact-source-viewer" class="source-viewer"></div>
+        <div id="impact-source-viewer" class="source-viewer" role="group" aria-label="ソースコードビューア（Space:選択開始, Shift+Space:範囲拡張, 矢印キー:行移動）" tabindex="-1"></div>
         <div id="impact-error" class="error hidden"></div>
       </div>
       <div id="impact-src-result"></div>
@@ -355,8 +408,11 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
         <h2>変更影響範囲の探索（インタラクティブ）</h2>
         <p class="muted">ソースコードが埋め込まれていないため，ファイルと行番号を指定します（--embed-sources 付きで再生成するとコードビューアが利用できます）。クライアント側で逆依存（呼び出し元・インポート元）を探索します。</p>
         <div class="toolbar">
+          <label class="visually-hidden" for="impact-file-select">対象ファイル</label>
           <select id="impact-file-select"></select>
+          <label class="visually-hidden" for="impact-line-input-fb">開始行</label>
           <input type="number" id="impact-line-input-fb" min="1" placeholder="開始行" style="width:100px">
+          <label class="visually-hidden" for="impact-line-end-input-fb">終了行</label>
           <input type="number" id="impact-line-end-input-fb" min="1" placeholder="終了行(省略可)" style="width:120px">
           <label>探索深度:
             <input type="range" id="impact-depth-input-fb" min="1" max="20" value="10">
@@ -371,7 +427,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </section>
 </main>
 
-<footer>Code Analyzer &mdash; 完全オフライン自己完結型HTMLレポート（同梱ライブラリ: D3.js, ISC License）</footer>
+<footer>Code Analyzer - 完全オフライン自己完結型HTMLレポート（同梱ライブラリ: D3.js, ISC License）</footer>
 </div>
 
 <noscript>このレポートの閲覧にはJavaScriptが必要です。</noscript>
@@ -427,12 +483,12 @@ function escapeHtml(s) {
   });
 }
 
-// Renders "—" for missing/undefined/null values so the UI never shows
+// Renders "-" for missing/undefined/null values so the UI never shows
 // "undefined" / "NaN" when a metric is absent from the embedded data.
 function fmt(v) {
-  if (v === undefined || v === null || v === '') return '—';
+  if (v === undefined || v === null || v === '') return '-';
   if (typeof v === 'number') {
-    if (!isFinite(v)) return '—';
+    if (!isFinite(v)) return '-';
     return Number.isInteger(v) ? v.toLocaleString('ja-JP')
                                 : v.toLocaleString('ja-JP', { maximumFractionDigits: 2 });
   }
@@ -442,6 +498,20 @@ function fmt(v) {
 function topDir(path) {
   var idx = path.indexOf('/');
   return idx === -1 ? '(root)' : path.slice(0, idx);
+}
+
+// True when the user's OS/browser requests reduced motion (SPEC a11y #9):
+// force-directed graphs render statically (simulation ticked to convergence
+// synchronously) instead of animating, and CSS disables transitions.
+function prefersReducedMotion() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+// Announces a short status message via the page's aria-live=polite region
+// (e.g. source-line selection changes) without moving keyboard focus.
+function announce(msg) {
+  var el = byId('aria-live-region');
+  if (el) el.textContent = msg;
 }
 
 /* =========================================================================
@@ -510,14 +580,36 @@ function showFatalError(err) {
 /* =========================================================================
  * Tabs
  * ========================================================================= */
+// WAI-ARIA "automatic activation" tabs pattern: Left/Right move focus and
+// activate; Home/End jump to the first/last tab. aria-selected + roving
+// tabindex (selected tab = 0, others = -1) track the active tab.
 function setupTabs() {
-  qsa('.tab-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () { activateTab(btn.dataset.tab); });
+  var tabs = qsa('.tab-btn');
+  tabs.forEach(function (btn) {
+    btn.addEventListener('click', function () { activateTab(btn.dataset.tab); btn.focus(); });
+    btn.addEventListener('keydown', function (ev) {
+      var idx = tabs.indexOf(btn);
+      var nextIdx = null;
+      if (ev.key === 'ArrowRight') nextIdx = (idx + 1) % tabs.length;
+      else if (ev.key === 'ArrowLeft') nextIdx = (idx - 1 + tabs.length) % tabs.length;
+      else if (ev.key === 'Home') nextIdx = 0;
+      else if (ev.key === 'End') nextIdx = tabs.length - 1;
+      if (nextIdx === null) return;
+      ev.preventDefault();
+      var nextTab = tabs[nextIdx];
+      activateTab(nextTab.dataset.tab);
+      nextTab.focus();
+    });
   });
 }
 
 function activateTab(name) {
-  qsa('.tab-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === name); });
+  qsa('.tab-btn').forEach(function (b) {
+    var selected = b.dataset.tab === name;
+    b.classList.toggle('active', selected);
+    b.setAttribute('aria-selected', selected ? 'true' : 'false');
+    b.tabIndex = selected ? 0 : -1;
+  });
   qsa('.tab-panel').forEach(function (p) { p.classList.toggle('active', p.id === 'tab-' + name); });
   if (!renderedTabs[name]) {
     if (name === 'graph') renderGraphTab();
@@ -603,6 +695,10 @@ function renderLangDonut(languages) {
   g.append('text').attr('text-anchor', 'middle').attr('dy', '0.35em')
     .attr('class', 'donut-center').text(total + ' files');
 
+  svg.attr('aria-label', '言語別内訳: ' + entries.map(function (e) {
+    return (LANG_LABELS[e[0]] || e[0]) + ' ' + e[1] + '件';
+  }).join(', '));
+
   byId('lang-legend').innerHTML = entries.map(function (e) {
     return '<span class="legend-item"><span class="swatch" style="background:' + colorOf(e) + '"></span>' +
       escapeHtml(LANG_LABELS[e[0]] || e[0]) + ' (' + e[1] + ')</span>';
@@ -615,30 +711,32 @@ function renderMetaTable() {
     ['ツールバージョン', m.tool_version],
     ['解析対象ルート', m.root],
     ['生成日時', m.generated_at],
-    ['Git リビジョン', m.git_revision || '—'],
-    ['除外パターン', (m.excludes || []).join(', ') || '—'],
-    ['包含パターン (--include)', (m.includes || []).join(', ') || '—'],
+    ['Git リビジョン', m.git_revision || '-'],
+    ['除外パターン', (m.excludes || []).join(', ') || '-'],
+    ['包含パターン (--include)', (m.includes || []).join(', ') || '-'],
     ['.gitignore を尊重', m.gitignore_respected ? 'はい' : 'いいえ'],
     ['ファイル数', m.file_count],
     ['パース失敗数', m.parse_failures],
     ['未解決インポート数', m.unresolved_imports]
   ];
-  byId('meta-table').innerHTML = rows.map(function (r) {
-    return '<tr><th>' + escapeHtml(r[0]) + '</th><td>' + escapeHtml(fmt(r[1])) + '</td></tr>';
+  var caption = '<caption class="visually-hidden">解析メタデータ</caption>';
+  byId('meta-table').innerHTML = caption + rows.map(function (r) {
+    return '<tr><th scope="row">' + escapeHtml(r[0]) + '</th><td>' + escapeHtml(fmt(r[1])) + '</td></tr>';
   }).join('');
 }
 
 function renderDiagTable() {
   var diags = DATA.diagnostics || [];
   var table = byId('diag-table');
-  if (!diags.length) { table.innerHTML = '<tr><td>診断はありません。</td></tr>'; return; }
-  var head = '<thead><tr><th>ファイル</th><th>種別</th><th>行</th><th>メッセージ</th></tr></thead>';
+  var caption = '<caption class="visually-hidden">診断一覧（パース失敗・スキップ・未解決インポート等）</caption>';
+  if (!diags.length) { table.innerHTML = caption + '<tr><td>診断はありません。</td></tr>'; return; }
+  var head = '<thead><tr><th scope="col">ファイル</th><th scope="col">種別</th><th scope="col">行</th><th scope="col">メッセージ</th></tr></thead>';
   var body = '<tbody>' + diags.map(function (d) {
     return '<tr><td>' + escapeHtml(d.file) + '</td><td><span class="badge badge-' + escapeHtml(d.kind) + '">' +
-      escapeHtml(DIAG_LABELS[d.kind] || d.kind) + '</span></td><td>' + (d.line || '—') + '</td><td>' +
+      escapeHtml(DIAG_LABELS[d.kind] || d.kind) + '</span></td><td>' + (d.line || '-') + '</td><td>' +
       escapeHtml(d.message) + '</td></tr>';
   }).join('') + '</tbody>';
-  table.innerHTML = head + body;
+  table.innerHTML = caption + head + body;
 }
 
 /* =========================================================================
@@ -698,6 +796,7 @@ function wireGraphControls() {
   byId('graph-cycle-btn').addEventListener('click', function () {
     graphState.cycleHighlight = !graphState.cycleHighlight;
     byId('graph-cycle-btn').classList.toggle('active', graphState.cycleHighlight);
+    byId('graph-cycle-btn').setAttribute('aria-pressed', graphState.cycleHighlight ? 'true' : 'false');
     applyCycleHighlight();
   });
   byId('graph-reset-btn').addEventListener('click', function () {
@@ -833,7 +932,7 @@ function buildAndRenderGraph() {
   var link = linkLayer.selectAll('line').data(links).join('line')
     .attr('class', function (d) { return 'link' + (d.confidence === 'certain' ? '' : ' link-dashed'); })
     .attr('stroke', function (d) {
-      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#c0392b' : '#b7bdc6';
+      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#B91C1C' : '#b7bdc6';
     })
     .attr('stroke-width', function (d) {
       return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2;
@@ -846,8 +945,13 @@ function buildAndRenderGraph() {
     .attr('stroke-dasharray', function (d) { return d.kind === 'dir' ? '3,2' : null; })
     .attr('stroke-width', 1.5)
     .attr('class', 'node-circle')
+    .attr('tabindex', 0)
+    .attr('role', 'button')
     .style('cursor', 'pointer')
     .on('click', function (ev, d) { onNodeClick(d); })
+    .on('keydown', function (ev, d) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onNodeClick(d); }
+    })
     .call(d3.drag()
       .on('start', dragStarted)
       .on('drag', dragged)
@@ -858,24 +962,39 @@ function buildAndRenderGraph() {
     .text(function (d) { return d.path.split('/').pop(); })
     .attr('class', 'node-label')
     .attr('dy', 4)
-    .attr('font-size', 10)
+    .attr('font-size', 12.5)
     .style('pointer-events', 'none');
 
+  var reducedMotion = prefersReducedMotion();
   graphSim = d3.forceSimulation(data.nodes)
     .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(70).strength(0.4))
     .force('charge', d3.forceManyBody().strength(-160))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collide', d3.forceCollide().radius(function (d) { return graphRadius(d.loc) + 6; }))
-    .on('tick', function () {
-      link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
-          .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
-      node.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
-      label.attr('x', function (d) { return d.x + graphRadius(d.loc) + 3; }).attr('y', function (d) { return d.y; });
-    });
+    .force('collide', d3.forceCollide().radius(function (d) { return graphRadius(d.loc) + 6; }));
 
-  function dragStarted(ev, d) { if (!ev.active) graphSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
-  function dragged(ev, d) { d.fx = ev.x; d.fy = ev.y; }
-  function dragEnded(ev, d) { if (!ev.active) graphSim.alphaTarget(0); d.fx = null; d.fy = null; }
+  function renderPositions() {
+    link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
+        .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
+    node.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+    label.attr('x', function (d) { return d.x + graphRadius(d.loc) + 3; }).attr('y', function (d) { return d.y; });
+  }
+
+  if (reducedMotion) {
+    // prefers-reduced-motion: skip the animated force-layout entirely --
+    // tick the simulation to convergence synchronously, then render once.
+    graphSim.stop();
+    for (var i = 0; i < 300; i++) graphSim.tick();
+    renderPositions();
+  } else {
+    graphSim.on('tick', renderPositions);
+  }
+
+  function dragStarted(ev, d) { if (!ev.active && !reducedMotion) graphSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+  function dragged(ev, d) { d.fx = ev.x; d.fy = ev.y; if (reducedMotion) renderPositions(); }
+  function dragEnded(ev, d) { if (!ev.active && !reducedMotion) graphSim.alphaTarget(0); d.fx = null; d.fy = null; }
+
+  var cycleCount = cyclesList().length;
+  svg.attr('aria-label', '依存グラフ: ' + data.nodes.length + 'ノード, ' + links.length + 'エッジ, 循環' + cycleCount + '件');
 
   applyGraphFilters();
 }
@@ -883,7 +1002,7 @@ function buildAndRenderGraph() {
 function applyCycleHighlight() {
   var cycleEdgeKeys = computeCycleEdgeKeySet();
   d3.selectAll('#graph-svg .links line')
-    .attr('stroke', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#c0392b' : '#b7bdc6'; })
+    .attr('stroke', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#B91C1C' : '#b7bdc6'; })
     .attr('stroke-width', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2; });
 }
 
@@ -920,7 +1039,7 @@ function renderGraphDetail(d) {
     var dependents = IMPORT_EDGES.filter(function (e) { return e.dst === d.id; }).map(function (e) { return e.src; });
     panel.innerHTML = '<h3>' + escapeHtml(d.path) + '</h3><p class="muted">外部パッケージ</p>' +
       '<h4>依存しているファイル (' + dependents.length + ')</h4>' +
-      '<ul class="dep-list">' + (dependents.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>';
+      '<ul class="dep-list">' + (dependents.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>-</li>') + '</ul>';
     return;
   }
   var file = FILES_BY_ID.get(d.id);
@@ -943,13 +1062,13 @@ function renderGraphDetail(d) {
       '<tr><th>Fan-out</th><td>' + fmt(m.fan_out) + '</td></tr>' +
     '</table>' +
     '<h4>依存元 (' + inbound.length + ')</h4>' +
-    '<ul class="dep-list">' + (inbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>' +
+    '<ul class="dep-list">' + (inbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>-</li>') + '</ul>' +
     '<h4>依存先 (' + outbound.length + ')</h4>' +
-    '<ul class="dep-list">' + (outbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>—</li>') + '</ul>' +
+    '<ul class="dep-list">' + (outbound.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>-</li>') + '</ul>' +
     '<h4>シンボル (' + symbols.length + ')</h4>' +
     '<ul class="dep-list">' + (symbols.map(function (s) {
       return '<li>' + escapeHtml(s.name) + ' <span class="muted">(' + escapeHtml(s.kind) + ', L' + s.span.start_line + '-' + s.span.end_line + ')</span></li>';
-    }).join('') || '<li>—</li>') + '</ul>';
+    }).join('') || '<li>-</li>') + '</ul>';
 }
 
 /* =========================================================================
@@ -1089,21 +1208,39 @@ function renderTreemap(treeData, mode) {
     return d.data.path + '\n' + label;
   });
   leaf.append('text')
-    .attr('x', 3).attr('y', 12)
-    .attr('font-size', 9)
+    .attr('x', 3).attr('y', 14)
+    .attr('font-size', 12.5)
     .attr('fill', '#fff')
     .style('pointer-events', 'none')
-    .text(function (d) { return (d.x1 - d.x0) > 40 ? d.data.name : ''; });
+    .text(function (d) { return (d.x1 - d.x0) > 60 ? d.data.name : ''; });
+
+  var treemapSummary = mode === 'mi' ? 'MIで色分け' : mode === 'hotspot' ? 'ホットスポットで色分け' : 'CC最大で色分け';
+  svg.attr('aria-label', 'ツリーマップ（' + treemapSummary + '）: ' + root.leaves().length + 'ファイル');
 
   renderTreemapLegend(mode);
 }
+
+// Colorblind-safe sequential scale for CC/risk (white -> vermillion), used
+// for the CC treemap color-by mode (Okabe-Ito derived, see design tokens).
+var CC_RISK_COLOR = d3.scaleLinear()
+  .domain([0, 0.5, 1])
+  .range(['#FDF6F0', '#D55E00', '#8F3E00'])
+  .interpolate(d3.interpolateRgb);
+
+// Colorblind-safe diverging scale for MI (vermillion=low/bad <-> blue=high/good).
+// Replaces the previous red->green (RdYlGn) scale, which is indistinguishable
+// for red-green color-vision deficiencies.
+var MI_DIVERGING_COLOR = d3.scaleLinear()
+  .domain([0, 0.25, 0.5, 0.75, 1])
+  .range(['#8F3E00', '#D55E00', '#F5F0EA', '#5AA6D4', '#0072B2'])
+  .interpolate(d3.interpolateRgb);
 
 function buildTreemapColorFn(mode) {
   if (mode === 'mi') {
     return function (fid) {
       var v = getMetric(fid, 'mi', null);
       if (v === null) return '#cccccc';
-      return d3.interpolateRdYlGn(Math.max(0, Math.min(1, v / 100)));
+      return MI_DIVERGING_COLOR(Math.max(0, Math.min(1, v / 100)));
     };
   }
   if (mode === 'hotspot') {
@@ -1117,7 +1254,7 @@ function buildTreemapColorFn(mode) {
   return function (fid) {
     var v = getMetric(fid, 'cc_max', null);
     if (v === null) return '#cccccc';
-    return d3.interpolateOrRd(Math.max(0, Math.min(1, v / maxCC)));
+    return CC_RISK_COLOR(Math.max(0, Math.min(1, v / maxCC)));
   };
 }
 
@@ -1125,14 +1262,16 @@ function renderTreemapLegend(mode) {
   var el = byId('treemap-legend');
   if (mode === 'mi') {
     el.innerHTML = '<span>MI低（悪い）</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
-      d3.interpolateRdYlGn(0) + ',' + d3.interpolateRdYlGn(0.5) + ',' + d3.interpolateRdYlGn(1) + ')"></div><span>MI高（良い）</span>';
+      MI_DIVERGING_COLOR(0) + ',' + MI_DIVERGING_COLOR(0.5) + ',' + MI_DIVERGING_COLOR(1) + ')"></div><span>MI高（良い）</span>' +
+      '<span class="muted">（数値はツールチップに併記）</span>';
   } else if (mode === 'hotspot') {
     el.innerHTML = '<span>ホットスポット低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
       d3.interpolateViridis(0) + ',' + d3.interpolateViridis(0.5) + ',' + d3.interpolateViridis(1) + ')"></div><span>ホットスポット高</span>' +
       '<span class="muted">（灰色 = データなし）</span>';
   } else {
     el.innerHTML = '<span>CC低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
-      d3.interpolateOrRd(0) + ',' + d3.interpolateOrRd(1) + ')"></div><span>CC高</span>';
+      CC_RISK_COLOR(0) + ',' + CC_RISK_COLOR(0.5) + ',' + CC_RISK_COLOR(1) + ')"></div><span>CC高</span>' +
+      '<span class="muted">（数値はツールチップに併記）</span>';
   }
 }
 
@@ -1164,7 +1303,7 @@ var filesMetricsSort = { key: 'path', dir: 1 };
 // hide the score's actual resolution -- see core/model.py's "hotspot"
 // contract: "float 0-1, 4dp").
 function fmtHotspot(v) {
-  if (v === undefined || v === null || typeof v !== 'number' || !isFinite(v)) return '—';
+  if (v === undefined || v === null || typeof v !== 'number' || !isFinite(v)) return '-';
   return v.toFixed(4);
 }
 
@@ -1279,11 +1418,13 @@ function renderHotspotScatter() {
   g.append('g').attr('transform', 'translate(' + margin.left + ',0)').call(d3.axisLeft(y).ticks(6));
 
   svg.append('text').attr('x', (margin.left + width - margin.right) / 2).attr('y', height - 6)
-    .attr('text-anchor', 'middle').attr('font-size', 11).attr('fill', 'var(--text-muted)')
+    .attr('text-anchor', 'middle').attr('font-size', 12.5).attr('fill', 'var(--text-muted)')
     .text('複雑度(CC合計)');
   svg.append('text').attr('transform', 'rotate(-90)').attr('x', -(margin.top + height - margin.bottom) / 2)
-    .attr('y', 14).attr('text-anchor', 'middle').attr('font-size', 11).attr('fill', 'var(--text-muted)')
+    .attr('y', 14).attr('text-anchor', 'middle').attr('font-size', 12.5).attr('fill', 'var(--text-muted)')
     .text('変更回数');
+
+  svg.attr('aria-label', 'ホットスポット散布図: ' + points.length + 'ファイル（横軸=複雑度, 縦軸=変更回数, 円の大きさ=LOC, 色=ホットスポットスコア）');
 
   var tooltip = byId('hotspot-tooltip');
 
@@ -1293,6 +1434,9 @@ function renderHotspotScatter() {
     .attr('cy', function (p) { return y(p.churn_commits); })
     .attr('r', function (p) { return r(p.loc_code); })
     .attr('fill', function (p) { return color(p.hotspot); })
+    .attr('tabindex', 0)
+    .attr('role', 'button')
+    .attr('aria-label', function (p) { return p.path + ': ホットスポット ' + fmtHotspot(p.hotspot); })
     .on('mousemove', function (ev, p) {
       var rect = wrap.getBoundingClientRect();
       tooltip.classList.remove('hidden');
@@ -1302,7 +1446,10 @@ function renderHotspotScatter() {
         '<br>CC合計: ' + fmt(p.cc_total) + ' / 変更回数: ' + fmt(p.churn_commits) + ' / LOC: ' + fmt(p.loc_code);
     })
     .on('mouseleave', function () { tooltip.classList.add('hidden'); })
-    .on('click', function (ev, p) { highlightMetricsRow(p.id); });
+    .on('click', function (ev, p) { highlightMetricsRow(p.id); })
+    .on('keydown', function (ev, p) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); highlightMetricsRow(p.id); }
+    });
 
   var legend = byId('hotspot-scatter-legend');
   legend.innerHTML = '<span>ホットスポット低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
@@ -1312,16 +1459,20 @@ function renderHotspotScatter() {
 function renderHotspotTable() {
   var table = byId('hotspot-table');
   var rows = (DATA.metrics.hotspots || []).slice(0, 20);
-  if (!rows.length) { table.innerHTML = '<tr><td>データがありません。</td></tr>'; return; }
-  var head = '<thead><tr><th>ファイル</th><th>ホットスポット</th><th>変更回数</th><th>CC合計</th><th>LOC(実効)</th></tr></thead>';
+  var caption = '<caption class="visually-hidden">ホットスポット上位20件</caption>';
+  if (!rows.length) { table.innerHTML = caption + '<tr><td>データがありません。</td></tr>'; return; }
+  var head = '<thead><tr><th scope="col">ファイル</th><th scope="col">ホットスポット</th><th scope="col">変更回数</th><th scope="col">CC合計</th><th scope="col">LOC(実効)</th></tr></thead>';
   var body = '<tbody>' + rows.map(function (h) {
-    return '<tr data-file-id="' + escapeHtml(h.file_id) + '" class="hotspot-row-link"><td>' + escapeHtml(h.file_id) + '</td><td>' +
+    return '<tr data-file-id="' + escapeHtml(h.file_id) + '" class="hotspot-row-link" tabindex="0" role="button"><td>' + escapeHtml(h.file_id) + '</td><td>' +
       fmtHotspot(h.hotspot) + '</td><td>' + fmt(h.churn_commits) + '</td><td>' + fmt(h.cc_total) + '</td><td>' + fmt(h.loc_code) + '</td></tr>';
   }).join('') + '</tbody>';
-  table.innerHTML = head + body;
+  table.innerHTML = caption + head + body;
   qsa('tr.hotspot-row-link', table).forEach(function (tr) {
     tr.style.cursor = 'pointer';
     tr.addEventListener('click', function () { highlightMetricsRow(tr.dataset.fileId); });
+    tr.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); highlightMetricsRow(tr.dataset.fileId); }
+    });
   });
 }
 
@@ -1405,9 +1556,13 @@ function wireMetricsExportButtons() {
 function renderFilesMetricsTable() {
   var rows = sortRows(buildFilesMetricsRows(), filesMetricsSort);
   var table = byId('files-metrics-table');
+  var caption = '<caption class="visually-hidden">ファイル別メトリクス</caption>';
   var thead = '<thead><tr>' + FILE_METRIC_COLUMNS.map(function (c) {
-    var arrow = filesMetricsSort.key === c.key ? (filesMetricsSort.dir === 1 ? ' ▲' : ' ▼') : '';
-    return '<th data-key="' + c.key + '" class="sortable-th">' + escapeHtml(c.label) + arrow + '</th>';
+    var active = filesMetricsSort.key === c.key;
+    var ariaSort = active ? (filesMetricsSort.dir === 1 ? 'ascending' : 'descending') : 'none';
+    var indicator = active ? '<span class="sort-indicator" aria-hidden="true">' + (filesMetricsSort.dir === 1 ? ' ▲' : ' ▼') + '</span>' : '';
+    return '<th scope="col" aria-sort="' + ariaSort + '"><button type="button" class="sortable-th" data-key="' + c.key + '">' +
+      escapeHtml(c.label) + indicator + '</button></th>';
   }).join('') + '</tr></thead>';
   var tbody = '<tbody>' + rows.map(function (r) {
     return '<tr data-file-id="' + escapeHtml(r.id) + '">' + FILE_METRIC_COLUMNS.map(function (c) {
@@ -1415,10 +1570,10 @@ function renderFilesMetricsTable() {
       return '<td>' + escapeHtml(text) + '</td>';
     }).join('') + '</tr>';
   }).join('') + '</tbody>';
-  table.innerHTML = thead + tbody;
-  qsa('th.sortable-th', table).forEach(function (th) {
-    th.addEventListener('click', function () {
-      var key = th.dataset.key;
+  table.innerHTML = caption + thead + tbody;
+  qsa('button.sortable-th', table).forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.dataset.key;
       if (filesMetricsSort.key === key) filesMetricsSort.dir *= -1;
       else filesMetricsSort = { key: key, dir: 1 };
       renderFilesMetricsTable();
@@ -1447,13 +1602,14 @@ function renderWorstCcTable() {
     .sort(function (a, b) { return b.m.cc - a.m.cc; })
     .slice(0, 20);
   var table = byId('worst-cc-table');
-  if (!rows.length) { table.innerHTML = '<tr><td>データがありません。</td></tr>'; return; }
-  var head = '<thead><tr><th>シンボル</th><th>ファイル</th><th>種別</th><th>CC</th><th>LOC</th><th>引数数</th></tr></thead>';
+  var caption = '<caption class="visually-hidden">循環的複雑度ワースト20（関数/メソッド）</caption>';
+  if (!rows.length) { table.innerHTML = caption + '<tr><td>データがありません。</td></tr>'; return; }
+  var head = '<thead><tr><th scope="col">シンボル</th><th scope="col">ファイル</th><th scope="col">種別</th><th scope="col">CC</th><th scope="col">LOC</th><th scope="col">引数数</th></tr></thead>';
   var body = '<tbody>' + rows.map(function (r) {
     return '<tr><td>' + escapeHtml(r.s.name) + '</td><td>' + escapeHtml(r.s.file_id) + '</td><td>' +
       escapeHtml(r.s.kind) + '</td><td>' + fmt(r.m.cc) + '</td><td>' + fmt(r.m.loc) + '</td><td>' + fmt(r.m.params) + '</td></tr>';
   }).join('') + '</tbody>';
-  table.innerHTML = head + body;
+  table.innerHTML = caption + head + body;
 }
 
 function renderMiHistogram() {
@@ -1475,9 +1631,10 @@ function renderMiHistogram() {
     .attr('width', function (d) { return Math.max(0, x(d.x1) - x(d.x0) - 2); })
     .attr('y', function (d) { return y(d.length); })
     .attr('height', function (d) { return y(0) - y(d.length); })
-    .attr('fill', '#0072B2');
+    .attr('fill', '#15803D');
   g.append('g').attr('transform', 'translate(0,' + (height - margin.bottom) + ')').call(d3.axisBottom(x).ticks(5));
   g.append('g').attr('transform', 'translate(' + margin.left + ',0)').call(d3.axisLeft(y).ticks(5));
+  svg.attr('aria-label', 'ファイル保守性指数(MI)分布ヒストグラム: ' + values.length + 'ファイル');
 }
 
 function renderCyclesList() {
@@ -1521,10 +1678,16 @@ function renderImpactTab() {
   }
 }
 
+// Triple-encodes confidence (color + icon + text) so it never relies on
+// color alone (WCAG 1.4.1). Icons mirror the approved design proposal.
+var BADGE_ICON_OK = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5 5 9.5 10 3" stroke="currentColor" stroke-width="2" fill="none"/></svg>';
+var BADGE_ICON_WARN = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2v5" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="9.6" r="1.1" fill="currentColor"/></svg>';
+var BADGE_ICON_DANGER = '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="2"/></svg>';
+
 function confidenceBadge(conf) {
-  if (conf === 'certain') return '<span class="badge badge-certain">確実</span>';
-  if (conf === 'inferred') return '<span class="badge badge-inferred">推定</span>';
-  return '<span class="badge badge-review">要確認</span>';
+  if (conf === 'certain') return '<span class="badge badge-certain">' + BADGE_ICON_OK + '確実</span>';
+  if (conf === 'inferred') return '<span class="badge badge-inferred">' + BADGE_ICON_WARN + '推定</span>';
+  return '<span class="badge badge-review">' + BADGE_ICON_DANGER + '要確認</span>';
 }
 
 function groupAffectedByHop(affectedFiles) {
@@ -1548,13 +1711,14 @@ function renderAffectedFilesSection(affectedFiles, clickable) {
     html += '<h3>ホップ ' + hop + '</h3><ul class="dep-list">';
     files.forEach(function (af) {
       var isClickable = clickable && fileHasSource(af.file_id);
-      var nameAttrs = isClickable
-        ? ' class="affected-file-row" data-file="' + escapeHtml(af.file_id) + '" title="クリックしてこのファイルのソースを表示"'
-        : '';
-      html += '<li><strong' + nameAttrs + '>' + escapeHtml(af.file_id) + '</strong><ul class="symbol-list">';
+      var nameHtml = isClickable
+        ? '<button type="button" class="affected-file-row" data-file="' + escapeHtml(af.file_id) +
+          '" title="クリックしてこのファイルのソースを表示">' + escapeHtml(af.file_id) + '</button>'
+        : '<strong>' + escapeHtml(af.file_id) + '</strong>';
+      html += '<li>' + nameHtml + '<ul class="symbol-list">';
       (af.symbols || []).forEach(function (s) {
         html += '<li>' + escapeHtml(s.symbol_id) + ' ' + confidenceBadge(s.confidence) +
-          ' <span class="muted">via ' + escapeHtml(s.via || '—') + ', L' + (s.lines || []).join(',') + '</span></li>';
+          ' <span class="muted">via ' + escapeHtml(s.via || '-') + ', L' + (s.lines || []).join(',') + '</span></li>';
       });
       html += '</ul></li>';
     });
@@ -1590,9 +1754,9 @@ function renderPrecomputedImpact(impact) {
   var stats = impact.stats || {};
   var showViewer = hasEmbeddedSources();
   var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
-    '<tr><th>ファイル</th><td>' + escapeHtml(query.file || '—') + '</td></tr>' +
+    '<tr><th>ファイル</th><td>' + escapeHtml(query.file || '-') + '</td></tr>' +
     '<tr><th>行</th><td>' + fmt(query.start_line) + (query.end_line && query.end_line !== query.start_line ? '-' + query.end_line : '') + '</td></tr>' +
-    '<tr><th>シンボル</th><td>' + escapeHtml(origin.symbol_name || '—') + ' (' + escapeHtml(origin.kind || '—') + ')</td></tr>' +
+    '<tr><th>シンボル</th><td>' + escapeHtml(origin.symbol_name || '-') + ' (' + escapeHtml(origin.kind || '-') + ')</td></tr>' +
     '<tr><th>探索深度</th><td>' + fmt(query.depth) + '</td></tr>' +
     '<tr><th>影響ファイル数</th><td>' + fmt(stats.files) + '</td></tr>' +
     '<tr><th>影響シンボル数</th><td>' + fmt(stats.symbols) + '</td></tr>' +
@@ -1665,21 +1829,44 @@ function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
   if (!fileId || !fileHasSource(fileId)) {
     container.innerHTML = '<p class="muted">このファイルのソースは埋め込まれていません。</p>';
     container.onclick = null;
+    container._srcViewerOpts = null;
     return;
   }
   var lines = DATA.sources[fileId].split(/\r\n|\r|\n/);
   var selRange = opts.selectionRange || null;
   var impactLines = opts.impactLines || new Set();
   var dataflowLines = opts.dataflowLines || new Set();
+
+  // Re-rendering (e.g. after a Space-selection) replaces every row, which
+  // would otherwise drop keyboard focus -- remember which line had it so we
+  // can restore focus to the equivalent row below (roving tabindex).
+  var hadFocus = container.contains(document.activeElement);
+  var prevFocusedLine = (hadFocus && document.activeElement.dataset) ? parseInt(document.activeElement.dataset.line, 10) : null;
+
   container.innerHTML = lines.map(function (text, idx) {
     var lineNo = idx + 1;
     var cls = ['src-line'];
     if (selRange && lineNo >= selRange[0] && lineNo <= selRange[1]) cls.push('src-line-selected');
     if (impactLines.has(lineNo)) cls.push('src-line-impact');
     if (dataflowLines.has(lineNo)) cls.push('src-line-dataflow');
-    return '<div class="' + cls.join(' ') + '" data-line="' + lineNo + '">' +
+    return '<div class="' + cls.join(' ') + '" data-line="' + lineNo + '" tabindex="-1">' +
       '<span class="src-lineno">' + lineNo + '</span><span class="src-code">' + escapeHtml(text) + '</span></div>';
   }).join('');
+
+  // Roving tabindex: only one line is ever tabbable at a time (thousands of
+  // per-line tabindex=0 elements would wreck Tab-key performance), moved via
+  // the shared keydown handler wired below.
+  var rovingLine = prevFocusedLine || (selRange && selRange[1]) || 1;
+  if (rovingLine < 1) rovingLine = 1;
+  if (rovingLine > lines.length) rovingLine = lines.length;
+  var rovingRow = container.querySelector('.src-line[data-line="' + rovingLine + '"]');
+  if (rovingRow) {
+    rovingRow.tabIndex = 0;
+    if (hadFocus) rovingRow.focus();
+  }
+
+  container._srcViewerOpts = opts;
+
   if (opts.selectable && opts.onSelect) {
     container.onclick = function (ev) {
       var row = ev.target.closest ? ev.target.closest('.src-line') : null;
@@ -1689,13 +1876,53 @@ function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
   } else {
     container.onclick = null;
   }
+
+  wireSourceViewerKeyboard(container);
+
+  if (selRange) {
+    announce('選択範囲: L' + selRange[0] + (selRange[1] !== selRange[0] ? '-' + selRange[1] : ''));
+  }
+}
+
+// A single keydown listener per source-viewer container (roving tabindex):
+// ArrowUp/ArrowDown/Home/End move focus between lines; Space selects the
+// focused line (Shift+Space extends the range), mirroring click/shift-click.
+// Wiring once on the container (rather than per-line) keeps this cheap even
+// for files with thousands of lines.
+function wireSourceViewerKeyboard(container) {
+  if (container._srcViewerKeydownWired) return;
+  container._srcViewerKeydownWired = true;
+  container.addEventListener('keydown', function (ev) {
+    var rows = qsa('.src-line', container);
+    if (!rows.length) return;
+    var current = ev.target.closest ? ev.target.closest('.src-line') : null;
+    var idx = current ? rows.indexOf(current) : 0;
+    if (ev.key === ' ' || ev.key === 'Spacebar') {
+      var opts = container._srcViewerOpts;
+      if (opts && opts.selectable && opts.onSelect && current) {
+        ev.preventDefault();
+        opts.onSelect(parseInt(current.dataset.line, 10), !!ev.shiftKey);
+      }
+      return;
+    }
+    var nextIdx = null;
+    if (ev.key === 'ArrowDown') nextIdx = Math.min(rows.length - 1, idx + 1);
+    else if (ev.key === 'ArrowUp') nextIdx = Math.max(0, idx - 1);
+    else if (ev.key === 'Home') nextIdx = 0;
+    else if (ev.key === 'End') nextIdx = rows.length - 1;
+    if (nextIdx === null) return;
+    ev.preventDefault();
+    rows.forEach(function (r) { r.tabIndex = -1; });
+    rows[nextIdx].tabIndex = 0;
+    rows[nextIdx].focus();
+  });
 }
 
 function renderMiniGraph(svgId, highlightFileIds) {
   var svg = d3.select('#' + svgId);
   svg.selectAll('*').remove();
   var width = 700, height = 420;
-  svg.attr('width', width).attr('height', height);
+  svg.attr('width', width).attr('height', height).attr('role', 'img');
   var nodes = DATA.files.map(function (f) {
     return { id: f.id, path: f.path, language: f.language, loc: getMetric(f.id, 'loc_code', DEFAULT_LOC) };
   });
@@ -1712,18 +1939,29 @@ function renderMiniGraph(svgId, highlightFileIds) {
     .attr('r', function (d) { return r(d.loc); })
     .attr('fill', function (d) { return LANG_COLORS[d.language] || EXTERNAL_COLOR; })
     .attr('opacity', function (d) { return highlightFileIds.has(d.id) ? 1 : 0.15; })
-    .attr('stroke', function (d) { return highlightFileIds.has(d.id) ? '#c0392b' : '#fff'; })
+    .attr('stroke', function (d) { return highlightFileIds.has(d.id) ? '#B91C1C' : '#fff'; })
     .attr('stroke-width', function (d) { return highlightFileIds.has(d.id) ? 2 : 1; });
   nodeSel.append('title').text(function (d) { return d.path; });
+  var reducedMotion = prefersReducedMotion();
   var sim = d3.forceSimulation(nodes)
     .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(50).strength(0.3))
     .force('charge', d3.forceManyBody().strength(-100))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .on('tick', function () {
-      link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
-          .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
-      nodeSel.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
-    });
+    .force('center', d3.forceCenter(width / 2, height / 2));
+
+  function renderPositions() {
+    link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
+        .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
+    nodeSel.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+  }
+  if (reducedMotion) {
+    sim.stop();
+    for (var i = 0; i < 300; i++) sim.tick();
+    renderPositions();
+  } else {
+    sim.on('tick', renderPositions);
+  }
+
+  svg.attr('aria-label', '影響範囲グラフ: ' + nodes.length + 'ファイル中 ' + highlightFileIds.size + 'ファイルが影響を受けています');
 }
 
 /* ---- Shared traversal engine ----
@@ -1843,14 +2081,14 @@ function traceImpact(fileId, startLine, endLine, depth) {
 }
 
 function originSymbolLabel(result) {
-  return result.origin_symbols.map(function (s) { return s.name + '(' + s.kind + ')'; }).join(', ') || '—';
+  return result.origin_symbols.map(function (s) { return s.name + '(' + s.kind + ')'; }).join(', ') || '-';
 }
 
 function impactResultHeaderRows(fileId, startLine, endLine, depth, result) {
   return '<tr><th>ファイル</th><td>' + escapeHtml(fileId) + '</td></tr>' +
-    '<tr><th>選択範囲</th><td>L' + fmt(startLine) + (endLine !== startLine ? '–' + endLine : '') + '</td></tr>' +
+    '<tr><th>選択範囲</th><td>L' + fmt(startLine) + (endLine !== startLine ? '-' + endLine : '') + '</td></tr>' +
     '<tr><th>対象シンボル</th><td>' + escapeHtml(originSymbolLabel(result)) + '</td></tr>' +
-    '<tr><th>対象変数</th><td>' + escapeHtml(result.sliced_vars.length ? result.sliced_vars.join(', ') : '—') + '</td></tr>' +
+    '<tr><th>対象変数</th><td>' + escapeHtml(result.sliced_vars.length ? result.sliced_vars.join(', ') : '-') + '</td></tr>' +
     '<tr><th>探索深度</th><td>' + fmt(depth) + '</td></tr>' +
     '<tr><th>影響ファイル数</th><td>' + fmt(result.stats.files) + '</td></tr>' +
     '<tr><th>影響シンボル数</th><td>' + fmt(result.stats.symbols) + '</td></tr>' +
@@ -1947,7 +2185,7 @@ function onSrcFlowLineClick(lineNo, shiftKey) {
 function updateSrcFlowSelectionLabel() {
   var label = byId('impact-selection-label');
   if (srcFlow.startLine && srcFlow.endLine) {
-    label.textContent = '選択範囲: L' + srcFlow.startLine + (srcFlow.endLine !== srcFlow.startLine ? '–' + srcFlow.endLine : '');
+    label.textContent = '選択範囲: L' + srcFlow.startLine + (srcFlow.endLine !== srcFlow.startLine ? '-' + srcFlow.endLine : '');
   } else {
     label.textContent = '行をクリックして選択範囲の開始を指定してください。';
   }

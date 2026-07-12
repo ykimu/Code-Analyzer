@@ -5,13 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Code Analyzer 比較レポート</title>
 <style>
-/* ==== Design tokens (matches report_template.html's palette) ==== */
+/* ==== Design tokens (white x green, WCAG AA -- matches report_template.html) ==== */
 :root{
-  --bg:#f5f6f8; --panel-bg:#ffffff; --border:#dde1e6; --border-soft:#e9ebef;
-  --text:#1b1f24; --text-muted:#5b6470; --accent:#0072B2; --accent-dark:#00527f;
-  --green:#1b7f42; --green-bg:#e6f4ea; --amber:#8a6100; --amber-bg:#fdf1d6;
-  --red:#c0392b; --red-bg:#fbe7e4; --grey:#6b7280; --grey-bg:#eef0f3;
-  --shadow:0 1px 2px rgba(20,20,30,0.06),0 1px 6px rgba(20,20,30,0.05);
+  --bg:#FAFAF9; --panel-bg:#FFFFFF; --border:#E7E5E4; --border-soft:#E7E5E4; --border-strong:#D6D3D1; --border-input:#8E8984;
+  --text:#1C1917; --text-muted:#57534E;
+  --accent:#15803D; --accent-dark:#166534; --accent-active:#14532D;
+  --accent-tint:#F0FDF4; --accent-border:#BBF7D0; --focus:#16A34A;
+  --warn-text:#B45309; --warn-bg:#FFFBEB;
+  --danger-text:#B91C1C; --danger-bg:#FEF2F2;
+  --ok-text:#166534; --ok-bg:#DCFCE7;
+  /* legacy names kept for minimal-diff reuse across this file, remapped to the new palette */
+  --green:#15803D; --green-bg:#DCFCE7; --amber:#B45309; --amber-bg:#FEF3C7;
+  --red:#B91C1C; --red-bg:#FEF2F2; --grey:#57534E; --grey-bg:#F0EFED;
+  --shadow:0 1px 2px rgba(28,25,23,0.05),0 1px 6px rgba(28,25,23,0.05);
   --radius:8px;
 }
 *{box-sizing:border-box;}
@@ -19,13 +25,30 @@ html,body{margin:0;padding:0;}
 body{
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
   background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+  font-variant-numeric:tabular-nums;
 }
 h1,h2,h3,h4{margin:0 0 8px 0; font-weight:600;}
 h2{font-size:16px; border-bottom:1px solid var(--border-soft); padding-bottom:6px; margin-bottom:12px;}
 h3{font-size:13px; color:var(--text-muted); margin-top:16px;}
 table{border-collapse:collapse; width:100%;}
 .hidden{display:none !important;}
-.muted{color:var(--text-muted); font-size:12px;}
+.muted{color:var(--text-muted); font-size:12.5px;}
+
+/* ==== Accessibility primitives ==== */
+:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
+.visually-hidden{
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+  clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+.skip-link{
+  position:absolute; left:8px; top:-48px; background:var(--accent); color:#fff;
+  padding:10px 16px; border-radius:var(--radius); z-index:1000; font-size:13px; font-weight:600;
+  text-decoration:none; transition:top .15s;
+}
+.skip-link:focus{top:8px;}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important;}
+}
 
 header{
   background:var(--panel-bg); border-bottom:1px solid var(--border);
@@ -36,7 +59,7 @@ header h1{font-size:17px; margin-bottom:8px;}
 .header-meta .side{background:var(--grey-bg); border-radius:var(--radius); padding:8px 12px; font-size:12.5px;}
 .header-meta .side.old-side{border-left:4px solid var(--grey);}
 .header-meta .side.new-side{border-left:4px solid var(--accent);}
-.header-meta .side .tag{font-weight:700; font-size:11px; text-transform:uppercase; color:var(--text-muted); margin-bottom:2px;}
+.header-meta .side .tag{font-weight:700; font-size:12.5px; text-transform:uppercase; color:var(--text-muted); margin-bottom:2px;}
 .header-meta .side dl{margin:0; display:grid; grid-template-columns:auto 1fr; gap:2px 8px;}
 .header-meta .side dt{color:var(--text-muted);}
 .header-meta .side dd{margin:0;}
@@ -53,52 +76,62 @@ main{padding:18px 20px 60px 20px; max-width:1200px; margin:0 auto;}
   background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
   padding:12px 14px; box-shadow:var(--shadow);
 }
-.card-label{font-size:12px; color:var(--text-muted); margin-bottom:4px;}
-.card-value{font-size:16px; font-weight:700;}
+.card-label{font-size:12.5px; color:var(--text-muted); margin-bottom:4px;}
+.card-value{font-size:16px; font-weight:700; font-variant-numeric:tabular-nums;}
 .card-value .arrow{margin-left:4px; font-weight:700;}
-.delta-better{color:var(--green);}
-.delta-worse{color:var(--red);}
+.delta-better{color:var(--accent-active);}
+.delta-worse{color:var(--danger-text);}
 .delta-neutral{color:var(--text-muted);}
 
 .two-col{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
 @media (max-width:760px){ .two-col{grid-template-columns:1fr;} .header-meta{grid-template-columns:1fr;} }
 
 .file-list{list-style:none; margin:0; padding:0; font-size:12.5px; max-height:340px; overflow:auto;}
-.file-list li{padding:3px 6px; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
-.file-list.added li{color:var(--green);}
-.file-list.removed li{color:var(--red);}
+.file-list li{padding:5px 6px; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+.file-list.added li{color:var(--accent-active);}
+.file-list.removed li{color:var(--danger-text);}
 .file-list.empty{color:var(--text-muted); font-family:inherit; font-style:italic;}
 
 .table-scroll{overflow:auto; max-height:520px;}
 .data-table{font-size:12.5px; min-width:600px;}
-.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:6px 10px; text-align:left; white-space:nowrap;}
+.data-table caption{text-align:left;}
+.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:9px 10px; text-align:left; white-space:nowrap;}
 .data-table thead th{position:sticky; top:0; background:var(--panel-bg); z-index:1;}
 .data-table td.file-cell{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
 .sortable-th{cursor:pointer; user-select:none;}
-.sortable-th:hover{color:var(--accent-dark);}
+.sortable-th:hover{color:var(--accent-active);}
 .sortable-th .sort-arrow{color:var(--accent); margin-left:3px;}
+button.sortable-th{
+  display:inline-flex; align-items:center; gap:4px; font:inherit; font-weight:600; color:var(--text-muted);
+  background:none; border:none; padding:0; margin:0; cursor:pointer; min-height:24px;
+}
+button.sortable-th:hover{color:var(--accent-active);}
 
 .dep-list{list-style:none; margin:4px 0; padding:0; font-size:12.5px; max-height:300px; overflow:auto;}
-.dep-list li{padding:3px 0; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
-.dep-list.added li{color:var(--green);}
-.dep-list.removed li{color:var(--red);}
+.dep-list li{padding:5px 0; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+.dep-list.added li{color:var(--accent-active);}
+.dep-list.removed li{color:var(--danger-text);}
 .dep-arrow{color:var(--text-muted); margin:0 4px; font-family:inherit;}
 
-.badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600;}
-.badge-added{background:var(--green-bg); color:var(--green);}
-.badge-removed{background:var(--red-bg); color:var(--red);}
+.badge{
+  display:inline-flex; align-items:center; gap:5px; padding:2px 10px; border-radius:999px;
+  font-size:12.5px; font-weight:600; line-height:1.6;
+}
+.badge-added{background:var(--ok-bg); color:var(--ok-text);}
+.badge-removed{background:var(--danger-bg); color:var(--danger-text);}
 .badge-new{background:var(--amber-bg); color:var(--amber);}
-.badge-resolved{background:var(--green-bg); color:var(--green);}
+.badge-resolved{background:var(--ok-bg); color:var(--ok-text);}
 
 #empty-state{
   text-align:center; padding:60px 20px; color:var(--text-muted);
 }
 #empty-state .big{font-size:20px; font-weight:700; color:var(--text); margin-bottom:8px;}
 
-footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
+footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:center;}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">本文へスキップ</a>
 
 <header>
   <h1>Code Analyzer 比較レポート</h1>
@@ -122,8 +155,8 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </div>
 </header>
 
-<main>
-  <div id="empty-state" class="hidden">
+<main id="main">
+  <div id="empty-state" class="hidden" role="status">
     <div class="big">__CA_EMPTY_TEXT__</div>
     <div>2つの解析結果に検出可能な違いはありませんでした。</div>
   </div>
@@ -199,7 +232,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   </div>
 </main>
 
-<footer>Code Analyzer &mdash; 完全オフライン自己完結型比較レポート</footer>
+<footer>Code Analyzer - 完全オフライン自己完結型比較レポート</footer>
 
 <noscript>このレポートの閲覧にはJavaScriptが必要です。</noscript>
 
@@ -238,7 +271,7 @@ function escapeHtml(s) {
 }
 
 function fmtNum(v) {
-  if (v === undefined || v === null) return '—';
+  if (v === undefined || v === null) return '-';
   if (typeof v === 'number') {
     return Number.isInteger(v) ? v.toLocaleString('ja-JP')
                                 : v.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
@@ -299,12 +332,12 @@ function isEmptyCompare(d) {
 function renderHeader() {
   var om = DATA.old_meta || {};
   var nm = DATA.new_meta || {};
-  byId('old-root').textContent = om.root || '—';
-  byId('old-generated-at').textContent = om.generated_at || '—';
-  byId('old-git-revision').textContent = om.git_revision || '—';
-  byId('new-root').textContent = nm.root || '—';
-  byId('new-generated-at').textContent = nm.generated_at || '—';
-  byId('new-git-revision').textContent = nm.git_revision || '—';
+  byId('old-root').textContent = om.root || '-';
+  byId('old-generated-at').textContent = om.generated_at || '-';
+  byId('old-git-revision').textContent = om.git_revision || '-';
+  byId('new-root').textContent = nm.root || '-';
+  byId('new-generated-at').textContent = nm.generated_at || '-';
+  byId('new-git-revision').textContent = nm.git_revision || '-';
 }
 
 /* =========================================================================
@@ -407,29 +440,35 @@ function renderChangedFilesTable() {
 
 function sortArrow(col) {
   if (currentSort.col !== col) return '';
-  return currentSort.dir === 'asc' ? ' <span class="sort-arrow">▲</span>' : ' <span class="sort-arrow">▼</span>';
+  return currentSort.dir === 'asc' ? ' <span class="sort-arrow" aria-hidden="true">▲</span>' : ' <span class="sort-arrow" aria-hidden="true">▼</span>';
+}
+
+function ariaSortFor(col) {
+  if (currentSort.col !== col) return 'none';
+  return currentSort.dir === 'asc' ? 'ascending' : 'descending';
 }
 
 function drawChangedFilesTable() {
   var table = byId('changed-files-table');
-  var theadCols = '<th class="sortable-th" data-col="file_id">ファイル' + sortArrow('file_id') + '</th>' +
+  var caption = '<caption class="visually-hidden">変更ファイル一覧</caption>';
+  var theadCols = '<th scope="col" aria-sort="' + ariaSortFor('file_id') + '"><button type="button" class="sortable-th" data-col="file_id">ファイル' + sortArrow('file_id') + '</button></th>' +
     changedColumns.map(function (c) {
       var label = c === 'mi' ? 'MI' : metricLabel(c);
       var sortCol = (c === 'mi') ? '__mi_abs__' : c;
-      return '<th class="sortable-th" data-col="' + sortCol + '">' + escapeHtml(label) + sortArrow(sortCol) + '</th>';
+      return '<th scope="col" aria-sort="' + ariaSortFor(sortCol) + '"><button type="button" class="sortable-th" data-col="' + sortCol + '">' + escapeHtml(label) + sortArrow(sortCol) + '</button></th>';
     }).join('');
   var bodyRows = changedRows.map(function (row) {
     var cells = changedColumns.map(function (c) {
       var d = row.deltas[c];
-      return '<td>' + (d ? pairHtml(c, d[0], d[1]) : '—') + '</td>';
+      return '<td>' + (d ? pairHtml(c, d[0], d[1]) : '-') + '</td>';
     }).join('');
     return '<tr><td class="file-cell">' + escapeHtml(row.file_id) + '</td>' + cells + '</tr>';
   }).join('');
-  table.innerHTML = '<thead><tr>' + theadCols + '</tr></thead><tbody>' + bodyRows + '</tbody>';
+  table.innerHTML = caption + '<thead><tr>' + theadCols + '</tr></thead><tbody>' + bodyRows + '</tbody>';
 
-  Array.prototype.slice.call(table.querySelectorAll('.sortable-th')).forEach(function (th) {
-    th.addEventListener('click', function () {
-      var col = th.getAttribute('data-col');
+  Array.prototype.slice.call(table.querySelectorAll('button.sortable-th')).forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var col = btn.getAttribute('data-col');
       if (currentSort.col === col) {
         currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
       } else {

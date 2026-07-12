@@ -644,7 +644,7 @@ def test_version(capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert TOOL_VERSION in out
-    assert TOOL_VERSION == "1.3.0"
+    assert TOOL_VERSION == "1.4.0"
 
 
 def test_no_command_prints_help_exit_2(capsys):
