@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Analyzer</title>
+<style>
+/* ==== Design tokens (matches report_template.html's design language) ==== */
+:root{
+  --bg:#f5f6f8; --panel-bg:#ffffff; --border:#dde1e6; --border-soft:#e9ebef;
+  --text:#1b1f24; --text-muted:#5b6470; --accent:#0072B2; --accent-dark:#00527f;
+  --green:#1b7f42; --green-bg:#e6f4ea; --amber:#8a6100; --amber-bg:#fdf1d6;
+  --red:#c0392b; --red-bg:#fbe7e4; --grey:#6b7280; --grey-bg:#eef0f3;
+  --shadow:0 1px 2px rgba(20,20,30,0.06),0 1px 6px rgba(20,20,30,0.05);
+  --radius:8px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+}
+h1,h2,h3{margin:0 0 8px 0; font-weight:600;}
+h2{font-size:15px; border-bottom:1px solid var(--border-soft); padding-bottom:6px; margin-bottom:12px;}
+.muted{color:var(--text-muted); font-size:12px;}
+.hidden{display:none !important;}
+
+header{
+  background:var(--panel-bg); border-bottom:1px solid var(--border);
+  padding:14px 20px;
+}
+header h1{font-size:19px; display:inline-block; margin-right:10px;}
+#version-badge{font-size:12px; color:var(--text-muted);}
+
+main{max-width:880px; margin:0 auto; padding:20px 20px 60px 20px;}
+
+.panel{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:16px 18px; margin-bottom:16px; box-shadow:var(--shadow);
+}
+
+/* ==== Buttons / inputs ==== */
+.btn{
+  padding:7px 14px; border-radius:6px; border:1px solid var(--border); background:#fff;
+  cursor:pointer; font-size:13px;
+}
+.btn:hover{background:var(--grey-bg);}
+.btn:disabled{opacity:0.45; cursor:default;}
+.btn-primary{background:var(--accent); color:#fff; border-color:var(--accent-dark);}
+.btn-primary:hover{background:var(--accent-dark);}
+.btn-primary:disabled{background:var(--accent); opacity:0.5;}
+.btn-big{padding:12px 22px; font-size:15px; font-weight:600; border-radius:8px;}
+.btn-sm{padding:4px 10px; font-size:12px; border-radius:5px;}
+input[type=text],input[type=number]{
+  padding:6px 9px; border:1px solid var(--border); border-radius:6px; font-size:13px;
+  background:#fff; width:100%;
+}
+label.field{display:block; font-size:12px; color:var(--text-muted); margin-bottom:4px;}
+.field-row{margin-bottom:12px;}
+.checkbox-row{display:flex; align-items:center; gap:6px; margin-bottom:10px; font-size:13px;}
+.checkbox-row input{width:auto;}
+
+/* ==== Folder browser ==== */
+#breadcrumb{
+  font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:12.5px; background:var(--grey-bg); border:1px solid var(--border-soft);
+  border-radius:6px; padding:8px 10px; margin-bottom:8px; word-break:break-all;
+}
+#browse-toolbar{display:flex; align-items:center; gap:8px; margin-bottom:8px; flex-wrap:wrap;}
+#dir-list{
+  list-style:none; margin:0; padding:0; max-height:220px; overflow:auto;
+  border:1px solid var(--border-soft); border-radius:6px;
+}
+#dir-list li{border-bottom:1px solid var(--border-soft);}
+#dir-list li:last-child{border-bottom:none;}
+#dir-list button{
+  width:100%; text-align:left; background:none; border:none; padding:7px 10px;
+  font-size:13px; cursor:pointer; color:var(--text);
+}
+#dir-list button:hover{background:var(--grey-bg); color:var(--accent-dark);}
+#dir-list .empty-note{padding:10px; color:var(--text-muted); font-size:12.5px;}
+.path-sync-row{display:flex; gap:8px; margin-top:10px;}
+.path-sync-row input{flex:1;}
+.browse-error{color:var(--red); font-size:12.5px; margin-top:6px;}
+
+/* ==== Options (collapsible) ==== */
+#options-toggle{
+  background:none; border:none; cursor:pointer; color:var(--accent-dark);
+  font-size:13px; padding:0; font-weight:600;
+}
+#options-body{margin-top:14px;}
+.options-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px 16px;}
+@media (max-width:640px){.options-grid{grid-template-columns:1fr;}}
+
+/* ==== Run / progress ==== */
+#run-row{display:flex; align-items:center; gap:14px; margin-top:6px;}
+.spinner{
+  width:18px; height:18px; border-radius:50%;
+  border:3px solid var(--border); border-top-color:var(--accent);
+  animation:spin 0.9s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+#phase-steps{display:flex; gap:0; margin-top:14px; font-size:12.5px;}
+.phase-step{
+  padding:6px 12px; border:1px solid var(--border-soft); color:var(--text-muted);
+  background:var(--grey-bg);
+}
+.phase-step:first-child{border-radius:6px 0 0 6px;}
+.phase-step:last-child{border-radius:0 6px 6px 0;}
+.phase-step.current{background:var(--accent); color:#fff; border-color:var(--accent-dark); font-weight:600;}
+.phase-step.past{background:var(--green-bg); color:var(--green);}
+#progress-area{margin-top:10px;}
+#result-area{margin-top:14px;}
+.summary-cards{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:12px 0;}
+.summary-card{
+  background:var(--grey-bg); border:1px solid var(--border-soft); border-radius:var(--radius);
+  padding:10px 12px; text-align:center;
+}
+.summary-value{font-size:20px; font-weight:700; color:var(--accent-dark);}
+.summary-label{font-size:11.5px; color:var(--text-muted); margin-top:2px;}
+.out-dir-line{font-size:12.5px; color:var(--text-muted); margin-top:8px; word-break:break-all;}
+.error-box{
+  background:var(--red-bg); color:var(--red); padding:10px 14px; border-radius:6px;
+  margin-top:10px; font-size:13px;
+}
+
+/* ==== Recent list ==== */
+#recent-list{list-style:none; margin:0; padding:0;}
+#recent-list li{
+  border-bottom:1px solid var(--border-soft); padding:10px 2px;
+  display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+}
+#recent-list li:last-child{border-bottom:none;}
+.recent-main{min-width:0; flex:1;}
+.recent-path{
+  font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:12.5px; word-break:break-all;
+}
+.recent-meta{font-size:11.5px; color:var(--text-muted); margin-top:2px;}
+.recent-actions{display:flex; gap:6px; flex-shrink:0;}
+#recent-empty{color:var(--text-muted); font-size:13px;}
+
+footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Code Analyzer</h1>
+  <span id="version-badge">v__VERSION__</span>
+</header>
+
+<main>
+  <!-- ============ プロジェクト選択 ============ -->
+  <section class="panel">
+    <h2>プロジェクト選択</h2>
+    <div id="breadcrumb">読み込み中…</div>
+    <div id="browse-toolbar">
+      <button id="up-btn" class="btn btn-sm" type="button">↑ 上へ</button>
+      <label class="checkbox-row" style="margin:0;">
+        <input type="checkbox" id="hidden-toggle"> 隠しフォルダ表示
+      </label>
+    </div>
+    <ul id="dir-list"><li class="empty-note">読み込み中…</li></ul>
+    <div id="browse-error" class="browse-error hidden"></div>
+    <div class="path-sync-row">
+      <input type="text" id="path-input" placeholder="パスを直接入力…">
+      <button id="path-sync-btn" class="btn" type="button">同期</button>
+    </div>
+  </section>
+
+  <!-- ============ オプション ============ -->
+  <section class="panel">
+    <button id="options-toggle" type="button">▸ 詳細オプション</button>
+    <div id="options-body" class="hidden">
+      <div class="options-grid">
+        <div class="field-row">
+          <label class="field" for="opt-include">include glob（複数はカンマ区切りではなく1パターン）</label>
+          <input type="text" id="opt-include" placeholder="例: src/**/*.py">
+        </div>
+        <div class="field-row">
+          <label class="field" for="opt-exclude">exclude glob</label>
+          <input type="text" id="opt-exclude" placeholder="例: **/vendor/**">
+        </div>
+        <div class="field-row">
+          <label class="field" for="opt-max-nodes">max-nodes（依存グラフ集約閾値）</label>
+          <input type="number" id="opt-max-nodes" value="800" min="1">
+        </div>
+        <div class="field-row">
+          <label class="field" for="opt-out-dir">出力先（既定: プロジェクト/code-analyzer-out）</label>
+          <input type="text" id="opt-out-dir" placeholder="（既定のまま）">
+        </div>
+      </div>
+      <label class="checkbox-row">
+        <input type="checkbox" id="opt-no-gitignore"> .gitignoreを無視
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" id="opt-no-embed"> ソース埋め込みOFF（影響範囲タブのソース表示が無効化される代わりにHTMLサイズ抑制）
+      </label>
+    </div>
+  </section>
+
+  <!-- ============ 実行 ============ -->
+  <section class="panel">
+    <h2>解析の実行</h2>
+    <div id="run-row">
+      <button id="run-btn" class="btn btn-primary btn-big" type="button">解析を実行</button>
+      <span id="run-spinner" class="spinner hidden"></span>
+    </div>
+    <div id="progress-area" class="hidden">
+      <div id="phase-steps">
+        <div class="phase-step" data-phase="走査・解析">走査・解析</div>
+        <div class="phase-step" data-phase="メトリクス">メトリクス</div>
+        <div class="phase-step" data-phase="レポート生成">レポート生成</div>
+      </div>
+    </div>
+    <div id="result-area" class="hidden">
+      <div class="summary-cards">
+        <div class="summary-card"><div class="summary-value" id="sum-files">-</div><div class="summary-label">ファイル数</div></div>
+        <div class="summary-card"><div class="summary-value" id="sum-parse-failures">-</div><div class="summary-label">パース失敗</div></div>
+        <div class="summary-card"><div class="summary-value" id="sum-unresolved">-</div><div class="summary-label">未解決インポート</div></div>
+      </div>
+      <button id="open-report-btn" class="btn btn-primary btn-big" type="button">レポートを開く</button>
+      <div class="out-dir-line" id="out-dir-line"></div>
+    </div>
+    <div id="error-area" class="error-box hidden"></div>
+  </section>
+
+  <!-- ============ 最近の解析 ============ -->
+  <section class="panel">
+    <h2>最近の解析</h2>
+    <ul id="recent-list"></ul>
+    <div id="recent-empty" class="hidden">まだ解析履歴はありません．</div>
+  </section>
+</main>
+
+<footer>Code Analyzer GUI v__VERSION__ &mdash; 127.0.0.1 のみでローカル動作します．</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  var state = {
+    currentPath: null,
+    pollTimer: null,
+    jobId: null,
+  };
+
+  // ---- small DOM helpers ----
+  function $(id){ return document.getElementById(id); }
+  function show(el){ el.classList.remove("hidden"); }
+  function hide(el){ el.classList.add("hidden"); }
+
+  function fetchJSON(url, options){
+    return fetch(url, options).then(function(res){
+      return res.json().then(function(data){
+        return {ok: res.ok, status: res.status, data: data};
+      });
+    });
+  }
+
+  // ---- folder browser ----
+  function browse(path, hidden){
+    var url = "/api/browse?hidden=" + (hidden ? "1" : "0");
+    if (path){ url += "&path=" + encodeURIComponent(path); }
+    return fetchJSON(url).then(function(r){
+      renderBrowse(r.data);
+    });
+  }
+
+  function renderBrowse(data){
+    state.currentPath = data.path;
+    state.currentParent = data.parent;
+    $("breadcrumb").textContent = data.path;
+    $("path-input").value = data.path;
+    $("up-btn").disabled = !data.parent;
+
+    var list = $("dir-list");
+    list.innerHTML = "";
+    if (data.dirs && data.dirs.length){
+      data.dirs.forEach(function(name){
+        var li = document.createElement("li");
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = name;
+        btn.addEventListener("click", function(){
+          var next = data.path.replace(/\/+$/, "") + "/" + name;
+          browse(next, $("hidden-toggle").checked);
+        });
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+    } else {
+      var li = document.createElement("li");
+      li.className = "empty-note";
+      li.textContent = "サブフォルダはありません．";
+      list.appendChild(li);
+    }
+
+    var errEl = $("browse-error");
+    if (data.error){
+      errEl.textContent = data.error;
+      show(errEl);
+    } else {
+      hide(errEl);
+    }
+  }
+
+  $("up-btn").addEventListener("click", function(){
+    if (state.currentParent){ browse(state.currentParent, $("hidden-toggle").checked); }
+  });
+
+  $("hidden-toggle").addEventListener("change", function(){
+    browse(state.currentPath, this.checked);
+  });
+
+  $("path-sync-btn").addEventListener("click", function(){
+    browse($("path-input").value, $("hidden-toggle").checked);
+  });
+  $("path-input").addEventListener("keydown", function(e){
+    if (e.key === "Enter"){ browse(this.value, $("hidden-toggle").checked); }
+  });
+  // Sync on change/blur too: a typed/pasted path must never be silently
+  // ignored just because the user clicked 解析を実行 without pressing Enter.
+  $("path-input").addEventListener("change", function(){
+    var typed = this.value.trim();
+    if (typed && typed !== state.currentPath){
+      browse(typed, $("hidden-toggle").checked);
+    }
+  });
+
+  // ---- options collapse ----
+  $("options-toggle").addEventListener("click", function(){
+    var body = $("options-body");
+    var open = !body.classList.contains("hidden");
+    if (open){
+      hide(body);
+      $("options-toggle").textContent = "▸ 詳細オプション";
+    } else {
+      show(body);
+      $("options-toggle").textContent = "▾ 詳細オプション";
+    }
+  });
+
+  // ---- phase indicator ----
+  var PHASE_ORDER = ["走査・解析", "メトリクス", "レポート生成"];
+  function updatePhaseSteps(currentPhase){
+    var idx = PHASE_ORDER.indexOf(currentPhase);
+    document.querySelectorAll(".phase-step").forEach(function(el){
+      var elIdx = PHASE_ORDER.indexOf(el.getAttribute("data-phase"));
+      el.classList.remove("current", "past");
+      if (idx === -1){ return; }
+      if (elIdx < idx){ el.classList.add("past"); }
+      else if (elIdx === idx){ el.classList.add("current"); }
+    });
+  }
+
+  function resetRunUI(){
+    hide($("progress-area"));
+    hide($("result-area"));
+    hide($("error-area"));
+    hide($("run-spinner"));
+    updatePhaseSteps(null);
+  }
+
+  function buildOptionsFromForm(){
+    return {
+      include: $("opt-include").value.trim(),
+      exclude: $("opt-exclude").value.trim(),
+      no_gitignore: $("opt-no-gitignore").checked,
+      embed_sources: !$("opt-no-embed").checked,
+      max_nodes: parseInt($("opt-max-nodes").value, 10) || 800,
+      out_dir: $("opt-out-dir").value.trim() || undefined,
+    };
+  }
+
+  function applyOptionsToForm(options){
+    options = options || {};
+    $("opt-include").value = options.include || "";
+    $("opt-exclude").value = options.exclude || "";
+    $("opt-no-gitignore").checked = !!options.no_gitignore;
+    $("opt-no-embed").checked = options.embed_sources === false;
+    $("opt-max-nodes").value = options.max_nodes || 800;
+  }
+
+  function runAnalyze(){
+    resetRunUI();
+    show($("progress-area"));
+    show($("run-spinner"));
+    $("run-btn").disabled = true;
+    updatePhaseSteps("走査・解析");
+
+    // Defensive submit-time read of path-input: if the user typed/pasted a
+    // path without pressing Enter (so state.currentPath is stale), the typed
+    // value wins. The server validates existence, so a bad path just errors.
+    var typedPath = $("path-input").value.trim();
+    var submitPath = (typedPath && typedPath !== state.currentPath)
+      ? typedPath : state.currentPath;
+
+    var opts = buildOptionsFromForm();
+    var body = {
+      path: submitPath,
+      include: opts.include,
+      exclude: opts.exclude,
+      no_gitignore: opts.no_gitignore,
+      embed_sources: opts.embed_sources,
+      max_nodes: opts.max_nodes,
+    };
+    if (opts.out_dir){ body.out_dir = opts.out_dir; }
+
+    fetchJSON("/api/analyze", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    }).then(function(r){
+      if (!r.ok){
+        showError(r.data.error || "解析を開始できませんでした．");
+        return;
+      }
+      state.jobId = r.data.job_id;
+      pollStatus();
+    }).catch(function(e){
+      showError(String(e));
+    });
+  }
+
+  function pollStatus(){
+    if (state.pollTimer){ clearInterval(state.pollTimer); }
+    state.pollTimer = setInterval(function(){
+      fetchJSON("/api/status?job=" + encodeURIComponent(state.jobId)).then(function(r){
+        if (!r.ok){
+          clearInterval(state.pollTimer);
+          showError(r.data.error || "ジョブ状態を取得できませんでした．");
+          return;
+        }
+        var data = r.data;
+        updatePhaseSteps(data.done ? "レポート生成" : data.phase);
+        if (data.done){
+          clearInterval(state.pollTimer);
+          $("run-btn").disabled = false;
+          hide($("run-spinner"));
+          if (data.error){
+            showError(data.error);
+          } else {
+            showResult(data);
+          }
+          loadRecent();
+        }
+      }).catch(function(e){
+        clearInterval(state.pollTimer);
+        showError(String(e));
+      });
+    }, 500);
+  }
+
+  function showResult(data){
+    hide($("error-area"));
+    var s = data.summary || {};
+    $("sum-files").textContent = s.files != null ? s.files : "-";
+    $("sum-parse-failures").textContent = s.parse_failures != null ? s.parse_failures : "-";
+    $("sum-unresolved").textContent = s.unresolved_imports != null ? s.unresolved_imports : "-";
+    $("out-dir-line").textContent = "出力先: " + data.out_dir;
+    $("open-report-btn").onclick = function(){
+      window.open(data.report_url, "_blank", "noopener");
+    };
+    show($("result-area"));
+  }
+
+  function showError(message){
+    $("run-btn").disabled = false;
+    hide($("run-spinner"));
+    var el = $("error-area");
+    el.textContent = "エラー: " + message;
+    show(el);
+  }
+
+  $("run-btn").addEventListener("click", function(){
+    if (!state.currentPath && !$("path-input").value.trim()){
+      showError("プロジェクトフォルダを選択してください．");
+      return;
+    }
+    runAnalyze();
+  });
+
+  // ---- recent analyses ----
+  function fmtTimestamp(ts){
+    if (!ts){ return ""; }
+    try {
+      var d = new Date(ts);
+      if (isNaN(d.getTime())){ return ts; }
+      return d.toLocaleString();
+    } catch (e){
+      return ts;
+    }
+  }
+
+  function loadRecent(){
+    fetchJSON("/api/recent").then(function(r){
+      renderRecent(r.data || []);
+    });
+  }
+
+  function renderRecent(entries){
+    var list = $("recent-list");
+    list.innerHTML = "";
+    if (!entries.length){
+      show($("recent-empty"));
+      return;
+    }
+    hide($("recent-empty"));
+    entries.forEach(function(entry){
+      var li = document.createElement("li");
+
+      var main = document.createElement("div");
+      main.className = "recent-main";
+      var pathDiv = document.createElement("div");
+      pathDiv.className = "recent-path";
+      pathDiv.textContent = entry.path || "";
+      var metaDiv = document.createElement("div");
+      metaDiv.className = "recent-meta";
+      var files = (entry.summary && entry.summary.files != null) ? entry.summary.files : "-";
+      metaDiv.textContent = fmtTimestamp(entry.timestamp) + " – ファイル数: " + files;
+      main.appendChild(pathDiv);
+      main.appendChild(metaDiv);
+
+      var actions = document.createElement("div");
+      actions.className = "recent-actions";
+
+      var rerunBtn = document.createElement("button");
+      rerunBtn.className = "btn btn-sm";
+      rerunBtn.type = "button";
+      rerunBtn.textContent = "再解析";
+      rerunBtn.addEventListener("click", function(){
+        applyOptionsToForm(entry.options);
+        if (entry.out_dir){ $("opt-out-dir").value = entry.out_dir; }
+        browse(entry.path, $("hidden-toggle").checked).then(function(){
+          runAnalyze();
+        });
+        window.scrollTo({top: 0, behavior: "smooth"});
+      });
+      actions.appendChild(rerunBtn);
+
+      if (entry.report_exists && entry.out_dir){
+        var openBtn = document.createElement("a");
+        openBtn.className = "btn btn-sm";
+        openBtn.textContent = "レポートを開く";
+        // served via the server-side whitelist endpoint (browsers block
+        // file: navigation from a page loaded over HTTP)
+        openBtn.href = "/api/report-file?path=" + encodeURIComponent(entry.out_dir);
+        openBtn.target = "_blank";
+        openBtn.rel = "noopener";
+        actions.appendChild(openBtn);
+      }
+
+      li.appendChild(main);
+      li.appendChild(actions);
+      list.appendChild(li);
+    });
+  }
+
+  // ---- init ----
+  resetRunUI();
+  browse(null, false);
+  loadRecent();
+})();
+</script>
+</body>
+</html>
