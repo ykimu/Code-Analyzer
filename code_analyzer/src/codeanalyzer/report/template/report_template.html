@@ -100,6 +100,11 @@ main{padding:18px 20px 60px 20px;}
   background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
   padding:12px 14px; box-shadow:var(--shadow);
 }
+button.card.card-link{
+  font:inherit; text-align:left; color:inherit; width:100%; cursor:pointer; appearance:none; -webkit-appearance:none;
+}
+.card.card-link:hover{border-color:var(--accent); box-shadow:0 1px 2px rgba(28,25,23,0.08),0 2px 10px rgba(21,128,61,0.14);}
+.card.card-link:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
 .card-value{font-size:22px; font-weight:700; color:var(--accent-active); font-variant-numeric:tabular-nums;}
 .card-label{font-size:12.5px; color:var(--text-muted); margin-top:2px;}
 .panel{
@@ -183,7 +188,7 @@ button.sortable-th:hover{color:var(--accent-active);}
 .graph-layout{display:grid; grid-template-columns:1fr 300px; gap:14px;}
 .graph-canvas-wrap{
   background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
-  overflow:hidden; box-shadow:var(--shadow);
+  overflow:hidden; box-shadow:var(--shadow); position:relative;
 }
 #graph-svg{display:block; width:100%;}
 .detail-panel{
@@ -198,9 +203,29 @@ button.sortable-th:hover{color:var(--accent-active);}
 .node-circle.dimmed{opacity:0.15;}
 text.dimmed{opacity:0.15;}
 .node-circle.search-hit{stroke:var(--focus) !important; stroke-width:3px !important;}
+.node-circle.node-selected{stroke:var(--focus) !important; stroke-width:3px !important;}
+.node-circle.node-neighbor-in{stroke:#0072B2 !important; stroke-width:2.5px !important;}
+.node-circle.node-neighbor-out{stroke:#D55E00 !important; stroke-width:2.5px !important;}
+.node-circle.node-pinned{stroke-width:2px;}
 .node-circle:focus-visible{outline:2px solid var(--focus); outline-offset:1px;}
-.node-label{fill:var(--text); font-family:inherit;}
+.node-label{
+  fill:var(--text); font-family:inherit;
+  paint-order:stroke fill; stroke:#fff; stroke-width:3px; stroke-linejoin:round; stroke-linecap:round;
+}
+.node-label.label-hidden{display:none;}
 line.link-dashed{stroke-dasharray:4,3;}
+line.link.dimmed{opacity:0.15;}
+line.link-hit{cursor:default;}
+.pin-ring{fill:none; stroke:var(--text-muted); stroke-width:1.2px; stroke-dasharray:2,3; pointer-events:none;}
+.graph-selection-bar{
+  display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;
+  margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid var(--border-soft);
+}
+.graph-edge-tooltip{
+  position:absolute; pointer-events:none; background:var(--text); color:#fff;
+  padding:5px 8px; border-radius:5px; font-size:12.5px; line-height:1.4; z-index:5; max-width:340px;
+}
+#graph-search-count{white-space:nowrap;}
 
 /* ==== Hierarchy ==== */
 .hierarchy-layout{display:grid; grid-template-columns:340px 1fr; gap:14px;}
@@ -231,11 +256,77 @@ line.link-dashed{stroke-dasharray:4,3;}
 .src-line-impact{background:var(--danger-bg); box-shadow:inset 3px 0 0 var(--danger-text);}
 .src-line-dataflow{background:#FEF9C3; box-shadow:inset 3px 0 0 #CA8A04;}
 .src-line-selected.src-line-dataflow{background:linear-gradient(90deg, var(--accent-tint), #FEF9C3); box-shadow:inset 3px 0 0 var(--accent);}
-.affected-file-row{cursor:pointer; text-decoration:underline dotted; text-underline-offset:2px; background:none; border:none; font:inherit; color:inherit; padding:0;}
-.affected-file-row:hover{color:var(--accent-active);}
-#impact-file-filter{min-width:220px;}
+/* Secondary "ソースを表示" action button, first element inside each
+ * affected-file <details> body (never inside the interactive <summary>,
+ * which would be an axe nested-interactive violation). Inherits .btn. */
+.affected-file-row{margin:4px 0 2px 0; font-size:12.5px;}
 .src-legend{display:flex; flex-wrap:wrap; gap:12px; margin:6px 0 8px 0; font-size:12.5px; color:var(--text-muted);}
 .src-legend .swatch{width:12px; height:12px; border-radius:3px;}
+
+/* ==== Metrics: filter bar / lang pills / threshold ==== */
+.filter-pill-group,.filter-check-group{display:flex; flex-wrap:wrap; gap:6px; align-items:center;}
+.filter-pill{padding:6px 12px; min-height:40px; font-size:12.5px;}
+.filter-check-label{
+  display:inline-flex; align-items:center; gap:5px; font-size:12.5px; min-height:40px;
+  padding:4px 10px; border:1px solid var(--border-input); border-radius:999px; background:#fff; cursor:pointer;
+}
+.filter-check-label:has(input:checked){background:var(--accent-tint); border-color:var(--accent-border); color:var(--accent-active);}
+#metrics-filter-bar{align-items:center;}
+
+/* ==== Metrics: inline bar cells (STICKY_TABLE_HEADER companion feature) ==== */
+.metric-cell{position:relative;}
+.metric-num{position:relative; z-index:1; display:block; text-align:right;}
+.metric-bar{position:absolute; left:0; bottom:0; height:6px; z-index:0; pointer-events:none;}
+.metric-bar.bar-loc{background:var(--accent-tint); border-top:1px solid var(--accent-border);}
+.metric-bar.bar-cc{background:#FDE9D9; border-top:1px solid #D55E00;}
+
+/* ==== Metrics: sticky table header (STICKY_TABLE_HEADER) ====
+ * The generic `.data-table thead th{position:sticky; top:0;}` rule already
+ * makes any scrollable data-table's header stick; this reinforces it for
+ * the (taller) files-metrics table specifically and adds a visible
+ * separation line once the header is stuck to the top of its scroller. */
+.metrics-table-scroll{max-height:560px; overflow:auto; position:relative;}
+.metrics-table-scroll .data-table thead th{
+  position:sticky; top:0; z-index:2; background:var(--panel-bg); border-bottom:1px solid var(--border-strong);
+}
+tr.metrics-row{cursor:pointer;}
+tr.metrics-row:hover{background:var(--bg);}
+tr.metrics-row:focus-visible{outline:2px solid var(--focus); outline-offset:-2px;}
+
+/* ==== Slide-in detail panel (file detail / reused by future panels) ==== */
+.slide-panel{
+  position:fixed; top:0; right:0; height:100vh; width:400px; max-width:92vw; z-index:210;
+  background:var(--panel-bg); border:1px solid var(--border); box-shadow:-6px 0 20px rgba(28,25,23,0.18);
+  padding:14px 16px; overflow:auto; transform:translateX(100%); visibility:hidden;
+  transition:transform .2s ease, visibility 0s linear .2s;
+}
+.slide-panel.open{transform:translateX(0); visibility:visible; transition:transform .2s ease, visibility 0s linear 0s;}
+.slide-panel-backdrop{position:fixed; inset:0; background:rgba(28,25,23,0.25); z-index:205;}
+.detail-func-table{min-width:0;}
+
+/* ==== Impact tab: combobox file picker ==== */
+.impact-combobox-wrap{position:relative; display:inline-block;}
+#impact-file-combo{min-width:260px;}
+.combobox-listbox{
+  position:absolute; top:100%; left:0; z-index:50; margin:2px 0 0 0; padding:4px 0; list-style:none;
+  background:var(--panel-bg); border:1px solid var(--border-strong); border-radius:var(--radius);
+  box-shadow:var(--shadow); max-height:280px; overflow:auto; min-width:280px; font-size:12.5px;
+}
+.combobox-option{padding:8px 12px; cursor:pointer; min-height:40px; display:flex; align-items:center;}
+.combobox-option:hover,.combobox-option.combobox-active{background:var(--accent-tint); color:var(--accent-active);}
+.combobox-empty{color:var(--text-muted); cursor:default;}
+
+/* ==== Impact tab: lightweight syntax highlighting ==== */
+.tok-comment{color:#57534E; font-style:italic;}
+.tok-string{color:#166534;}
+.tok-keyword{color:#1D4ED8;}
+.tok-number{color:#B45309;}
+
+/* ==== Impact tab: result filters / export / per-file details ==== */
+.result-filter-bar{margin-bottom:8px;}
+.affected-file-details{margin:4px 0; border-bottom:1px dashed var(--border-soft); padding-bottom:4px;}
+.affected-file-details summary{cursor:pointer; padding:6px 0; font-size:12.5px; min-height:28px;}
+.affected-file-details summary::marker{color:var(--text-muted);}
 
 /* ==== Footer ==== */
 footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:center;}
@@ -280,7 +371,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     </div>
     <div class="panel">
       <h2>診断 (パース失敗・スキップ・未解決インポート等)</h2>
-      <div class="table-scroll"><table id="diag-table" class="data-table"></table></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="スクロール可能な表"><table id="diag-table" class="data-table"></table></div>
     </div>
   </section>
 
@@ -289,17 +380,22 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     <div class="toolbar">
       <label class="visually-hidden" for="graph-search">ファイルパスを検索</label>
       <input type="text" id="graph-search" placeholder="ファイルパスを検索…">
+      <span id="graph-search-count" class="muted" aria-live="polite"></span>
       <label class="visually-hidden" for="graph-dir-filter">ディレクトリで絞り込み</label>
       <select id="graph-dir-filter"><option value="">すべてのディレクトリ</option></select>
       <label><input type="checkbox" id="graph-ext-toggle"> 外部依存を表示</label>
       <button id="graph-cycle-btn" class="btn" aria-pressed="false">循環依存をハイライト</button>
       <button id="graph-reset-btn" class="btn">表示をリセット</button>
+      <button id="graph-unpin-btn" class="btn">固定を全解除</button>
       <span id="graph-agg-note" class="note hidden"></span>
     </div>
     <div class="graph-layout">
-      <div class="graph-canvas-wrap"><svg id="graph-svg" role="img"></svg></div>
+      <div class="graph-canvas-wrap">
+        <svg id="graph-svg" role="group"></svg>
+        <div id="graph-edge-tooltip" class="graph-edge-tooltip hidden" aria-hidden="true"></div>
+      </div>
       <aside id="graph-detail" class="detail-panel">
-        <p class="hint">ノードをクリックすると詳細が表示されます。ドラッグで移動、ホイールでズームできます。</p>
+        <p class="hint">ノードをクリックすると詳細が表示されます。ドラッグで移動、ホイールでズームできます。ドラッグで移動した位置は固定され，ダブルクリックで固定解除できます。</p>
       </aside>
     </div>
     <div id="graph-legend" class="legend"></div>
@@ -319,7 +415,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
           <label><input type="radio" name="treemap-color" value="mi"> MIで色分け</label>
           <label id="treemap-hotspot-option" class="hidden"><input type="radio" name="treemap-color" value="hotspot"> ホットスポットで色分け</label>
         </div>
-        <svg id="treemap-svg" role="img"></svg>
+        <svg id="treemap-svg" role="group"></svg>
         <div id="treemap-legend" class="legend-gradient"></div>
       </div>
     </div>
@@ -335,24 +431,48 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       <h2>ホットスポット（複雑度 × 変更頻度）</h2>
       <p class="muted">円の大きさ = 実効LOC，色 = ホットスポットスコア（0-1）。点をクリックすると下のファイル別メトリクス表内の該当行がハイライトされます。</p>
       <div class="hotspot-scatter-wrap">
-        <svg id="hotspot-scatter-svg" role="img"></svg>
+        <svg id="hotspot-scatter-svg" role="group"></svg>
         <div id="hotspot-tooltip" class="hotspot-tooltip hidden"></div>
       </div>
       <div class="legend-gradient" id="hotspot-scatter-legend"></div>
       <h3>ホットスポット上位20件</h3>
-      <div class="table-scroll"><table id="hotspot-table" class="data-table"></table></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="スクロール可能な表"><table id="hotspot-table" class="data-table"></table></div>
     </div>
     <div class="panel">
-      <h2>ファイル別メトリクス（列見出しクリックでソート）</h2>
+      <h2>ファイル別メトリクス（列見出しクリックでソート，行クリックで詳細）</h2>
       <div class="toolbar">
         <button id="export-csv-btn" class="btn">CSVをダウンロード</button>
         <button id="export-json-btn" class="btn">JSONをダウンロード</button>
       </div>
-      <div class="table-scroll"><table id="files-metrics-table" class="data-table sortable"></table></div>
+      <div class="toolbar" id="metrics-filter-bar">
+        <label class="visually-hidden" for="metrics-filter-text">パスで絞り込み</label>
+        <input type="text" id="metrics-filter-text" placeholder="パスで絞り込み…" autocomplete="off">
+        <div id="metrics-lang-pills" class="filter-check-group" role="group" aria-label="言語で絞り込み"></div>
+        <label class="visually-hidden" for="metrics-threshold-col">閾値の対象列</label>
+        <select id="metrics-threshold-col">
+          <option value="">閾値フィルタなし</option>
+          <option value="cc_max">CC最大</option>
+          <option value="mi">MI</option>
+          <option value="loc_code">LOC(実効)</option>
+          <option value="hotspot">ホットスポット</option>
+          <option value="fan_in">Fan-in</option>
+          <option value="fan_out">Fan-out</option>
+        </select>
+        <label class="visually-hidden" for="metrics-threshold-cmp">閾値の比較方法</label>
+        <select id="metrics-threshold-cmp">
+          <option value="gte">以上 (&#8805;)</option>
+          <option value="lte">以下 (&#8804;)</option>
+        </select>
+        <label class="visually-hidden" for="metrics-threshold-val">閾値</label>
+        <input type="number" id="metrics-threshold-val" placeholder="値" style="width:100px">
+        <button type="button" id="metrics-filter-clear-btn" class="btn">フィルタをクリア</button>
+        <span id="metrics-filter-count" class="muted" aria-live="polite"></span>
+      </div>
+      <div class="table-scroll metrics-table-scroll" tabindex="0" role="region" aria-label="ファイル別メトリクス表"><table id="files-metrics-table" class="data-table sortable"></table></div>
     </div>
     <div class="panel">
       <h2>循環的複雑度ワースト20（関数/メソッド）</h2>
-      <div class="table-scroll"><table id="worst-cc-table" class="data-table"></table></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="スクロール可能な表"><table id="worst-cc-table" class="data-table"></table></div>
     </div>
     <div class="panel">
       <h2>ファイル保守性指標 (MI) 分布</h2>
@@ -362,6 +482,14 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       <h2>循環依存一覧</h2>
       <ul id="cycles-list" class="dep-list"></ul>
     </div>
+    <div id="metrics-detail-backdrop" class="slide-panel-backdrop hidden"></div>
+    <aside id="metrics-detail-panel" class="detail-panel slide-panel" role="dialog" aria-modal="false" aria-labelledby="metrics-detail-title" tabindex="-1">
+      <div class="toolbar" style="justify-content:space-between; flex-wrap:nowrap;">
+        <h3 id="metrics-detail-title" style="margin:0;">ファイル詳細</h3>
+        <button type="button" id="metrics-detail-close-btn" class="btn">閉じる</button>
+      </div>
+      <div id="metrics-detail-body"></div>
+    </aside>
   </section>
 
   <!-- ============ 影響範囲 ============ -->
@@ -375,10 +503,13 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
         <h2>変更影響範囲の探索</h2>
         <p class="muted">ファイルを選択し，下のソースコード中の行をクリック（Shift+クリックまたは2回目のクリックで範囲を拡張）して選択してから「影響範囲を解析」を実行してください。キーボードではソースビューア内で矢印キーとShift+Spaceを使用できます。</p>
         <div class="toolbar">
-          <label class="visually-hidden" for="impact-file-filter">ファイルを検索</label>
-          <input type="text" id="impact-file-filter" placeholder="ファイルを検索…" autocomplete="off">
-          <label class="visually-hidden" for="impact-file-picker">対象ファイル</label>
-          <select id="impact-file-picker"></select>
+          <div class="impact-combobox-wrap">
+            <label class="visually-hidden" for="impact-file-combo">対象ファイル（入力して検索）</label>
+            <input type="text" id="impact-file-combo" role="combobox" aria-expanded="false"
+                   aria-controls="impact-file-listbox" aria-autocomplete="list" autocomplete="off"
+                   placeholder="ファイルを検索…">
+            <ul id="impact-file-listbox" role="listbox" class="combobox-listbox hidden" aria-label="対象ファイル候補"></ul>
+          </div>
           <label>探索深度:
             <input type="range" id="impact-depth-input" min="1" max="20" value="10">
             <span id="impact-depth-value">10</span>
@@ -394,6 +525,11 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
           <button id="impact-range-clear-btn" class="btn">クリア</button>
           <button id="impact-back-origin-btn" class="btn hidden">起点に戻る</button>
           <button id="impact-run-btn" class="btn btn-primary">影響範囲を解析</button>
+        </div>
+        <div class="toolbar">
+          <label class="visually-hidden" for="impact-jump-line">行番号へ移動</label>
+          <input type="number" id="impact-jump-line" min="1" placeholder="行番号" style="width:110px">
+          <button type="button" id="impact-jump-btn" class="btn">移動</button>
         </div>
         <div id="impact-viewer-filename" class="muted" style="margin-bottom:4px;"></div>
         <div id="impact-source-viewer" class="source-viewer" role="group" aria-label="ソースコードビューア（Space:選択開始, Shift+Space:範囲拡張, 矢印キー:行移動）" tabindex="-1"></div>
@@ -603,6 +739,30 @@ function setupTabs() {
   });
 }
 
+var VALID_TAB_NAMES = ['overview', 'graph', 'hierarchy', 'metrics', 'impact'];
+
+// Reflects the active tab in the URL hash (#overview|#graph|#hierarchy|#metrics|#impact)
+// so a report can be deep-linked to a specific tab. We deliberately avoid
+// `location.hash = ...`, which pushes a new browser-history entry on every
+// tab switch and would pollute the back button after a few clicks. Instead
+// we replace the current history entry in place -- via history.replaceState
+// where available (no navigation / hashchange / scroll side effects), or a
+// location.replace() fallback (also non-history-polluting) otherwise.
+function setTabHash(name) {
+  var hash = '#' + name;
+  if (location.hash === hash) return;
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState(null, '', hash);
+  } else {
+    location.replace(location.pathname + location.search + hash);
+  }
+}
+
+function validHashTab() {
+  var h = (location.hash || '').replace(/^#/, '');
+  return VALID_TAB_NAMES.indexOf(h) !== -1 ? h : null;
+}
+
 function activateTab(name) {
   qsa('.tab-btn').forEach(function (b) {
     var selected = b.dataset.tab === name;
@@ -618,6 +778,7 @@ function activateTab(name) {
     if (name === 'impact') renderImpactTab();
     renderedTabs[name] = true;
   }
+  setTabHash(name);
 }
 
 /* =========================================================================
@@ -639,6 +800,12 @@ async function init() {
   setupTabs();
   renderOverview();
   renderedTabs.overview = true;
+  var initialTab = validHashTab();
+  if (initialTab && initialTab !== 'overview') {
+    activateTab(initialTab);
+  } else {
+    setTabHash('overview');
+  }
 }
 
 window.addEventListener('DOMContentLoaded', init);
@@ -656,17 +823,47 @@ function renderOverview() {
     { label: 'クラス数', value: fmt(proj.classes) },
     { label: '平均CC', value: fmt(proj.cc_avg) },
     { label: '平均MI', value: fmt(proj.mi_avg) },
-    { label: '循環依存数', value: fmt(proj.cycles_count) },
-    { label: '警告/診断数', value: fmt((DATA.diagnostics || []).length) }
+    { label: '循環依存数', value: fmt(proj.cycles_count), link: 'cycles' },
+    { label: '警告/診断数', value: fmt((DATA.diagnostics || []).length), link: 'diagnostics' }
   ];
+  if (hotspotsAvailable()) {
+    var topHotspot = DATA.metrics.hotspots[0] ? DATA.metrics.hotspots[0].hotspot : null;
+    cards.push({ label: '最大ホットスポット', value: fmtHotspot(topHotspot), link: 'hotspot' });
+  }
   byId('overview-cards').innerHTML = cards.map(function (c) {
-    return '<div class="card"><div class="card-value">' + escapeHtml(String(c.value)) +
-      '</div><div class="card-label">' + escapeHtml(c.label) + '</div></div>';
+    var body = '<div class="card-value">' + escapeHtml(String(c.value)) +
+      '</div><div class="card-label">' + escapeHtml(c.label) + '</div>';
+    if (c.link) {
+      return '<button type="button" class="card card-link" data-link="' + c.link + '">' + body + '</button>';
+    }
+    return '<div class="card">' + body + '</div>';
   }).join('');
+  qsa('.card-link', byId('overview-cards')).forEach(function (btn) {
+    btn.addEventListener('click', function () { handleOverviewCardLink(btn.dataset.link); });
+  });
 
   renderLangDonut(proj.languages || {});
   renderMetaTable();
   renderDiagTable();
+}
+
+// Cross-tab navigation from clickable overview summary cards. Metrics-tab
+// targets go through activateTab() so the ARIA tab state (aria-selected,
+// roving tabindex, panel visibility) stays correct, then scroll to the
+// relevant section once its markup has been rendered.
+function handleOverviewCardLink(kind) {
+  var smooth = prefersReducedMotion() ? 'auto' : 'smooth';
+  if (kind === 'diagnostics') {
+    var diagTable = byId('diag-table');
+    if (diagTable) diagTable.scrollIntoView({ block: 'start', behavior: smooth });
+    return;
+  }
+  var targetId = kind === 'cycles' ? 'cycles-list' : 'hotspot-panel';
+  activateTab('metrics');
+  setTimeout(function () {
+    var el = byId(targetId);
+    if (el) el.scrollIntoView({ block: 'start', behavior: smooth });
+  }, 50);
 }
 
 function renderLangDonut(languages) {
@@ -747,10 +944,27 @@ var graphState = {
   showExternal: false,
   dirFilter: '',
   searchTerm: '',
-  expandedDirs: new Set()
+  expandedDirs: new Set(),
+  selectedNodeId: null
 };
 var graphSim = null;
 var graphRadius = d3.scaleSqrt();
+var graphZoom = null;
+var graphSvgSel = null;
+var graphWidth = 800;
+var graphHeight = 620;
+var graphLinksData = [];          // last-rendered link objects (source/target resolved to node refs)
+var graphTopDegreeIds = new Set(); // top-30-by-degree node ids: always labeled regardless of zoom
+var graphCurrentZoomK = 1;
+var graphHoveredNodeId = null;
+var graphPinnedIds = new Set();    // node ids the user drag-pinned (fx/fy persisted across rebuilds)
+var graphPinnedPos = new Map();    // node id -> {x, y} for pinned nodes
+var graphLabelUpdateScheduled = false;
+
+// Colorblind-safe edge colors (Okabe & Ito): default grey, cycle-highlight
+// vermillion (matches the existing cycle color), inbound blue, outbound
+// orange (matches the neighborhood-highlight legend in the detail panel).
+var LINK_COLORS = { 'default': '#b7bdc6', cycle: '#B91C1C', 'in': '#0072B2', 'out': '#D55E00' };
 
 function renderGraphTab() {
   populateDirFilter();
@@ -783,11 +997,14 @@ function renderLangLegendFor(elId) {
 function wireGraphControls() {
   byId('graph-search').addEventListener('input', function (e) {
     graphState.searchTerm = e.target.value.trim().toLowerCase();
-    applyGraphFilters();
+    refreshGraphVisualState();
+  });
+  byId('graph-search').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); zoomToSearchMatches(); }
   });
   byId('graph-dir-filter').addEventListener('change', function (e) {
     graphState.dirFilter = e.target.value;
-    applyGraphFilters();
+    refreshGraphVisualState();
   });
   byId('graph-ext-toggle').addEventListener('change', function (e) {
     graphState.showExternal = e.target.checked;
@@ -797,14 +1014,94 @@ function wireGraphControls() {
     graphState.cycleHighlight = !graphState.cycleHighlight;
     byId('graph-cycle-btn').classList.toggle('active', graphState.cycleHighlight);
     byId('graph-cycle-btn').setAttribute('aria-pressed', graphState.cycleHighlight ? 'true' : 'false');
-    applyCycleHighlight();
+    refreshGraphVisualState();
   });
   byId('graph-reset-btn').addEventListener('click', function () {
     graphState.expandedDirs.clear();
     graphState.searchTerm = ''; byId('graph-search').value = '';
     graphState.dirFilter = ''; byId('graph-dir-filter').value = '';
+    updateSearchMatchCount();
     buildAndRenderGraph();
   });
+  byId('graph-unpin-btn').addEventListener('click', function () {
+    graphPinnedIds.clear();
+    graphPinnedPos.clear();
+    graphNodesData.forEach(function (n) { n.fx = null; n.fy = null; });
+    if (graphSim && !prefersReducedMotion()) graphSim.alpha(0.3).restart();
+    d3.selectAll('#graph-svg .nodes circle').classed('node-pinned', false);
+    d3.selectAll('#graph-svg .pins circle.pin-ring').remove();
+  });
+  // Clicking empty canvas (not a node/edge) clears the neighborhood selection.
+  d3.select('#graph-svg').on('click', function (ev) {
+    if (ev.target === this) clearGraphSelection();
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') clearGraphSelection();
+  });
+}
+
+/* ---- Neighborhood selection (click a node: dim non-neighbors, highlight
+ * incoming/outgoing edges + their endpoint nodes) -------------------------- */
+function computeNeighborSets() {
+  var sel = graphState.selectedNodeId;
+  var inIds = new Set(), outIds = new Set();
+  if (sel) {
+    graphLinksData.forEach(function (l) {
+      var ep = linkEndpointIds(l);
+      if (ep.t === sel) inIds.add(ep.s);
+      if (ep.s === sel) outIds.add(ep.t);
+    });
+  }
+  return { inIds: inIds, outIds: outIds };
+}
+
+function selectGraphNode(d) {
+  graphState.selectedNodeId = d.id;
+  renderGraphDetail(d);
+  refreshGraphVisualState();
+}
+
+function clearGraphSelection() {
+  if (!graphState.selectedNodeId) return;
+  graphState.selectedNodeId = null;
+  var panel = byId('graph-detail');
+  if (panel) {
+    panel.innerHTML = '<p class="hint">ノードをクリックすると詳細が表示されます。ドラッグで移動、ホイールでズームできます。ドラッグで移動した位置は固定され，ダブルクリックで固定解除できます。</p>';
+  }
+  refreshGraphVisualState();
+}
+
+/* ---- Search: match count + zoom-to-fit on Enter -------------------------- */
+function updateSearchMatchCount() {
+  var el = byId('graph-search-count');
+  if (!el) return;
+  if (!graphState.searchTerm) { el.textContent = ''; return; }
+  var n = graphNodesData.filter(nodeMatchesSearch).length;
+  el.textContent = n + '件';
+}
+
+function zoomToSearchMatches() {
+  updateSearchMatchCount();
+  if (!graphState.searchTerm || !graphZoom || !graphSvgSel) return;
+  var matches = graphNodesData.filter(nodeMatchesSearch).filter(function (d) {
+    return d.x !== undefined && d.y !== undefined;
+  });
+  if (!matches.length) return;
+  var pad = 60;
+  var x0 = d3.min(matches, function (d) { return d.x; }) - pad;
+  var x1 = d3.max(matches, function (d) { return d.x; }) + pad;
+  var y0 = d3.min(matches, function (d) { return d.y; }) - pad;
+  var y1 = d3.max(matches, function (d) { return d.y; }) + pad;
+  var w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+  var scale = Math.max(0.15, Math.min(4, 0.9 / Math.max(w / graphWidth, h / graphHeight)));
+  var tx = graphWidth / 2 - scale * (x0 + x1) / 2;
+  var ty = graphHeight / 2 - scale * (y0 + y1) / 2;
+  var transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+  if (prefersReducedMotion()) {
+    graphSvgSel.call(graphZoom.transform, transform);
+  } else {
+    graphSvgSel.transition().duration(400).call(graphZoom.transform, transform);
+  }
 }
 
 function fileToNode(f) {
@@ -872,7 +1169,7 @@ function computeGraphData() {
       if (!dstNodeId) return;
     }
     if (srcNodeId === dstNodeId) return;
-    links.push({ source: srcNodeId, target: dstNodeId, confidence: e.confidence, kind: e.kind, rawSrc: e.src, rawDst: e.dst });
+    links.push({ source: srcNodeId, target: dstNodeId, confidence: e.confidence, kind: e.kind, line: e.line, rawSrc: e.src, rawDst: e.dst });
   });
   nodes = nodes.concat(Array.from(extNodeMap.values()));
   return { nodes: nodes, links: links, aggregated: willAggregate };
@@ -894,11 +1191,71 @@ function cycleKeyOf(link) {
   return s + '|' + t;
 }
 
+// Shared "which visual state does this edge/node currently have" helpers,
+// used both for the initial draw and for the click-driven neighborhood
+// highlight / cycle highlight so the two features never fight over
+// .attr('stroke', ...). All are pure functions of (endpoint ids, current
+// graphState) -- no DOM reads -- so they're cheap to call for every link on
+// every interaction event (not per animation frame; see refreshGraphVisualState).
+function linkEndpointIds(d) {
+  return {
+    s: (d.source && d.source.id !== undefined) ? d.source.id : d.source,
+    t: (d.target && d.target.id !== undefined) ? d.target.id : d.target
+  };
+}
+function linkStateOf(d, sel, cycleEdgeKeys) {
+  if (sel) {
+    var ep = linkEndpointIds(d);
+    if (ep.t === sel) return 'in';
+    if (ep.s === sel) return 'out';
+    return 'dim';
+  }
+  if (cycleEdgeKeys && cycleEdgeKeys.has(cycleKeyOf(d))) return 'cycle';
+  return 'default';
+}
+function linkStrokeColor(d, sel, cycleEdgeKeys) {
+  var st = linkStateOf(d, sel, cycleEdgeKeys);
+  return LINK_COLORS[st === 'dim' ? 'default' : st];
+}
+function linkStrokeWidth(d, sel, cycleEdgeKeys) {
+  var st = linkStateOf(d, sel, cycleEdgeKeys);
+  return (st === 'cycle' || st === 'in' || st === 'out') ? 2.5 : 1.2;
+}
+function linkMarkerId(d, sel, cycleEdgeKeys) {
+  var st = linkStateOf(d, sel, cycleEdgeKeys);
+  return 'arrow-' + (st === 'dim' ? 'default' : st);
+}
+
 function buildAndRenderGraph() {
   if (graphSim) graphSim.stop();
   var data = computeGraphData();
   graphNodesData = data.nodes;
   var links = data.links;
+  graphLinksData = links;
+
+  // Restore drag-pinned positions (SPEC #5): fx/fy live on the node object,
+  // which is recreated on every rebuild, so persist pins in graphPinnedPos
+  // (id -> {x,y}) and re-apply them to the fresh node objects here.
+  data.nodes.forEach(function (n) {
+    if (graphPinnedIds.has(n.id) && graphPinnedPos.has(n.id)) {
+      var p = graphPinnedPos.get(n.id);
+      n.fx = p.x; n.fy = p.y; n.x = p.x; n.y = p.y;
+    }
+  });
+
+  // Label declutter (SPEC #3a): the 30 highest-degree nodes always keep
+  // their label regardless of zoom level.
+  var degreeMap = new Map();
+  links.forEach(function (l) {
+    degreeMap.set(l.source, (degreeMap.get(l.source) || 0) + 1);
+    degreeMap.set(l.target, (degreeMap.get(l.target) || 0) + 1);
+  });
+  graphTopDegreeIds = new Set(
+    data.nodes.slice()
+      .sort(function (a, b) { return (degreeMap.get(b.id) || 0) - (degreeMap.get(a.id) || 0); })
+      .slice(0, 30)
+      .map(function (n) { return n.id; })
+  );
 
   var noteEl = byId('graph-agg-note');
   noteEl.classList.toggle('hidden', !data.aggregated);
@@ -913,30 +1270,63 @@ function buildAndRenderGraph() {
   var width = (wrap && wrap.clientWidth) || 800;
   var height = 620;
   svg.attr('width', width).attr('height', height).attr('viewBox', '0 0 ' + width + ' ' + height);
+  graphWidth = width;
+  graphHeight = height;
+  graphSvgSel = svg;
+  graphCurrentZoomK = 1;
+  graphHoveredNodeId = null;
 
   var maxLoc = d3.max(data.nodes, function (d) { return d.loc; }) || 1;
   graphRadius.domain([0, maxLoc]).range([5, 28]);
+
+  // Arrowhead markers for edge direction (SPEC #2), one per link visual
+  // state so marker color always matches the line's stroke color.
+  var defs = svg.append('defs');
+  Object.keys(LINK_COLORS).forEach(function (key) {
+    defs.append('marker')
+      .attr('id', 'arrow-' + key)
+      .attr('viewBox', '0 0 10 10')
+      .attr('refX', 8.5)
+      .attr('refY', 5)
+      .attr('markerWidth', 5.5)
+      .attr('markerHeight', 5.5)
+      .attr('orient', 'auto-start-reverse')
+      .append('path')
+      .attr('d', 'M0,0 L10,5 L0,10 z')
+      .attr('fill', LINK_COLORS[key]);
+  });
 
   var container = svg.append('g').attr('class', 'graph-container');
   var linkLayer = container.append('g').attr('class', 'links');
   var nodeLayer = container.append('g').attr('class', 'nodes');
   var labelLayer = container.append('g').attr('class', 'labels');
+  var pinLayer = container.append('g').attr('class', 'pins');
 
   var zoom = d3.zoom().scaleExtent([0.1, 8]).on('zoom', function (ev) {
     container.attr('transform', ev.transform);
+    graphCurrentZoomK = ev.transform.k;
+    scheduleLabelVisibilityUpdate();
   });
   svg.call(zoom);
+  graphZoom = zoom;
 
   var cycleEdgeKeys = computeCycleEdgeKeySet();
+  var sel = graphState.selectedNodeId;
 
-  var link = linkLayer.selectAll('line').data(links).join('line')
+  var link = linkLayer.selectAll('line.link').data(links).join('line')
     .attr('class', function (d) { return 'link' + (d.confidence === 'certain' ? '' : ' link-dashed'); })
-    .attr('stroke', function (d) {
-      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#B91C1C' : '#b7bdc6';
-    })
-    .attr('stroke-width', function (d) {
-      return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2;
-    });
+    .attr('stroke', function (d) { return linkStrokeColor(d, sel, cycleEdgeKeys); })
+    .attr('stroke-width', function (d) { return linkStrokeWidth(d, sel, cycleEdgeKeys); })
+    .attr('marker-end', function (d) { return 'url(#' + linkMarkerId(d, sel, cycleEdgeKeys) + ')'; });
+
+  // Wide, invisible hit-area overlay so hovering near (not just exactly on)
+  // a thin edge shows the "src -> dst (kind, Lnn)" tooltip (SPEC #2).
+  var linkHit = linkLayer.selectAll('line.link-hit').data(links).join('line')
+    .attr('class', 'link-hit')
+    .attr('stroke', 'transparent')
+    .attr('stroke-width', 10)
+    .on('mousemove', function (ev, d) { showEdgeTooltip(ev, d); })
+    .on('mouseleave', function () { hideEdgeTooltip(); });
 
   var node = nodeLayer.selectAll('circle').data(data.nodes, function (d) { return d.id; }).join('circle')
     .attr('r', function (d) { return graphRadius(d.loc); })
@@ -945,12 +1335,26 @@ function buildAndRenderGraph() {
     .attr('stroke-dasharray', function (d) { return d.kind === 'dir' ? '3,2' : null; })
     .attr('stroke-width', 1.5)
     .attr('class', 'node-circle')
+    .classed('node-pinned', function (d) { return graphPinnedIds.has(d.id); })
+    .classed('node-selected', function (d) { return sel === d.id; })
     .attr('tabindex', 0)
     .attr('role', 'button')
     .style('cursor', 'pointer')
-    .on('click', function (ev, d) { onNodeClick(d); })
+    .on('click', function (ev, d) { ev.stopPropagation(); onNodeClick(d); })
     .on('keydown', function (ev, d) {
       if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onNodeClick(d); }
+    })
+    .on('mouseenter', function (ev, d) { graphHoveredNodeId = d.id; updateLabelVisibility(); })
+    .on('mouseleave', function (ev, d) { if (graphHoveredNodeId === d.id) graphHoveredNodeId = null; updateLabelVisibility(); })
+    .on('dblclick', function (ev, d) {
+      ev.stopPropagation();
+      if (!graphPinnedIds.has(d.id)) return;
+      graphPinnedIds.delete(d.id);
+      graphPinnedPos.delete(d.id);
+      d.fx = null; d.fy = null;
+      d3.select(this).classed('node-pinned', false);
+      updatePinIndicators();
+      if (graphSim && !prefersReducedMotion()) graphSim.alpha(0.3).restart();
     })
     .call(d3.drag()
       .on('start', dragStarted)
@@ -972,11 +1376,32 @@ function buildAndRenderGraph() {
     .force('center', d3.forceCenter(width / 2, height / 2))
     .force('collide', d3.forceCollide().radius(function (d) { return graphRadius(d.loc) + 6; }));
 
+  function updatePinIndicators() {
+    var pinned = data.nodes.filter(function (n) { return graphPinnedIds.has(n.id); });
+    var pins = pinLayer.selectAll('circle.pin-ring').data(pinned, function (d) { return d.id; }).join('circle')
+      .attr('class', 'pin-ring')
+      .attr('r', function (d) { return graphRadius(d.loc) + 4; });
+    pins.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+  }
+
   function renderPositions() {
     link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
-        .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
+      .attr('x2', function (d) {
+        // Shorten the line to the target node's edge (not its center) so the
+        // arrowhead marker lands outside the circle instead of under it.
+        var tr = graphRadius(d.target.loc) + 2;
+        var dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        d._ex = d.target.x - (dx / dist) * tr;
+        d._ey = d.target.y - (dy / dist) * tr;
+        return d._ex;
+      })
+      .attr('y2', function (d) { return d._ey; });
+    linkHit.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
+      .attr('x2', function (d) { return d._ex; }).attr('y2', function (d) { return d._ey; });
     node.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
     label.attr('x', function (d) { return d.x + graphRadius(d.loc) + 3; }).attr('y', function (d) { return d.y; });
+    updatePinIndicators();
   }
 
   if (reducedMotion) {
@@ -989,21 +1414,118 @@ function buildAndRenderGraph() {
     graphSim.on('tick', renderPositions);
   }
 
-  function dragStarted(ev, d) { if (!ev.active && !reducedMotion) graphSim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
-  function dragged(ev, d) { d.fx = ev.x; d.fy = ev.y; if (reducedMotion) renderPositions(); }
-  function dragEnded(ev, d) { if (!ev.active && !reducedMotion) graphSim.alphaTarget(0); d.fx = null; d.fy = null; }
+  function dragStarted(ev, d) {
+    if (!ev.active && !reducedMotion) graphSim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y; d._dragMoved = false;
+  }
+  function dragged(ev, d) {
+    d.fx = ev.x; d.fy = ev.y; d._dragMoved = true;
+    if (reducedMotion) renderPositions();
+  }
+  function dragEnded(ev, d) {
+    if (!ev.active && !reducedMotion) graphSim.alphaTarget(0);
+    if (d._dragMoved) {
+      // Dragging pins the node in place (SPEC #5); a plain click (no
+      // movement) must NOT pin, so it doesn't fight click-to-select.
+      graphPinnedIds.add(d.id);
+      graphPinnedPos.set(d.id, { x: d.fx, y: d.fy });
+      d3.select(this).classed('node-pinned', true);
+      updatePinIndicators();
+    } else {
+      d.fx = null; d.fy = null;
+    }
+  }
 
   var cycleCount = cyclesList().length;
   svg.attr('aria-label', '依存グラフ: ' + data.nodes.length + 'ノード, ' + links.length + 'エッジ, 循環' + cycleCount + '件');
 
-  applyGraphFilters();
+  updateSearchMatchCount();
+  refreshGraphVisualState();
 }
 
-function applyCycleHighlight() {
-  var cycleEdgeKeys = computeCycleEdgeKeySet();
-  d3.selectAll('#graph-svg .links line')
-    .attr('stroke', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? '#B91C1C' : '#b7bdc6'; })
-    .attr('stroke-width', function (d) { return (graphState.cycleHighlight && cycleEdgeKeys.has(cycleKeyOf(d))) ? 2.5 : 1.2; });
+// Single re-render pass for all click/toggle-driven visual state (cycle
+// highlight, neighborhood highlight, directory filter dimming, search
+// highlight, label declutter). Called only on discrete interaction events
+// (never per animation-frame tick), and only toggles classes/attrs on the
+// existing d3 selections -- it never rebuilds DOM nodes.
+function refreshGraphVisualState() {
+  var sel = graphState.selectedNodeId;
+  var neighbors = computeNeighborSets();
+  var cycleEdgeKeys = graphState.cycleHighlight ? computeCycleEdgeKeySet() : null;
+
+  d3.selectAll('#graph-svg .nodes circle')
+    .classed('dimmed', function (d) {
+      if (!nodeMatchesFilter(d)) return true;
+      if (sel) return d.id !== sel && !neighbors.inIds.has(d.id) && !neighbors.outIds.has(d.id);
+      return false;
+    })
+    .classed('search-hit', nodeMatchesSearch)
+    .classed('node-selected', function (d) { return !!sel && d.id === sel; })
+    .classed('node-neighbor-in', function (d) { return !!sel && neighbors.inIds.has(d.id); })
+    .classed('node-neighbor-out', function (d) { return !!sel && neighbors.outIds.has(d.id); });
+
+  d3.selectAll('#graph-svg .links line.link')
+    .classed('dimmed', function (d) { return linkStateOf(d, sel, cycleEdgeKeys) === 'dim'; })
+    .attr('stroke', function (d) { return linkStrokeColor(d, sel, cycleEdgeKeys); })
+    .attr('stroke-width', function (d) { return linkStrokeWidth(d, sel, cycleEdgeKeys); })
+    .attr('marker-end', function (d) { return 'url(#' + linkMarkerId(d, sel, cycleEdgeKeys) + ')'; });
+
+  updateSearchMatchCount();
+  updateLabelVisibility();
+}
+
+// SPEC #3: throttles label-visibility recomputation to at most once per
+// animation frame (zoom fires many events per gesture).
+function scheduleLabelVisibilityUpdate() {
+  if (graphLabelUpdateScheduled) return;
+  graphLabelUpdateScheduled = true;
+  requestAnimationFrame(function () {
+    graphLabelUpdateScheduled = false;
+    updateLabelVisibility();
+  });
+}
+
+// SPEC #3: a label is shown when the node is (a) among the top-30 by
+// degree, (b) the zoom scale exceeds 1.6x (dense areas gain more labels as
+// you zoom in), or (c) the node is hovered, selected, part of the current
+// neighborhood highlight, or a search hit. Everything else is hidden via
+// display:none (.label-hidden) so it costs nothing to paint.
+function updateLabelVisibility() {
+  var k = graphCurrentZoomK;
+  var sel = graphState.selectedNodeId;
+  var neighbors = sel ? computeNeighborSets() : null;
+  d3.selectAll('#graph-svg .labels text')
+    .classed('dimmed', function (d) {
+      if (!nodeMatchesFilter(d)) return true;
+      if (sel) return d.id !== sel && !neighbors.inIds.has(d.id) && !neighbors.outIds.has(d.id);
+      return false;
+    })
+    .classed('label-hidden', function (d) {
+      if (sel && (d.id === sel || neighbors.inIds.has(d.id) || neighbors.outIds.has(d.id))) return false;
+      if (nodeMatchesSearch(d)) return false;
+      if (graphHoveredNodeId === d.id) return false;
+      if (graphTopDegreeIds.has(d.id)) return false;
+      return !(k > 1.6);
+    });
+}
+
+function showEdgeTooltip(ev, d) {
+  var tooltip = byId('graph-edge-tooltip');
+  var wrap = document.querySelector('.graph-canvas-wrap');
+  if (!tooltip || !wrap) return;
+  var rect = wrap.getBoundingClientRect();
+  var srcPath = (FILES_BY_ID.get(d.rawSrc) || {}).path || d.rawSrc;
+  var dstPath = d.rawDst.indexOf('external:') === 0
+    ? d.rawDst.slice('external:'.length)
+    : ((FILES_BY_ID.get(d.rawDst) || {}).path || d.rawDst);
+  tooltip.textContent = srcPath + ' → ' + dstPath + ' (' + d.kind + ', L' + (d.line || '?') + ')';
+  tooltip.style.left = (ev.clientX - rect.left + 12) + 'px';
+  tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
+  tooltip.classList.remove('hidden');
+}
+function hideEdgeTooltip() {
+  var tooltip = byId('graph-edge-tooltip');
+  if (tooltip) tooltip.classList.add('hidden');
 }
 
 function nodeMatchesFilter(d) {
@@ -1016,13 +1538,6 @@ function nodeMatchesSearch(d) {
   if (!graphState.searchTerm) return false;
   return d.path.toLowerCase().indexOf(graphState.searchTerm) !== -1;
 }
-function applyGraphFilters() {
-  d3.selectAll('#graph-svg .nodes circle')
-    .classed('dimmed', function (d) { return !nodeMatchesFilter(d); })
-    .classed('search-hit', nodeMatchesSearch);
-  d3.selectAll('#graph-svg .labels text')
-    .classed('dimmed', function (d) { return !nodeMatchesFilter(d); });
-}
 
 function onNodeClick(d) {
   if (d.kind === 'dir') {
@@ -1030,16 +1545,35 @@ function onNodeClick(d) {
     buildAndRenderGraph();
     return;
   }
-  renderGraphDetail(d);
+  selectGraphNode(d);
+}
+
+// Selection controls (SPEC #1) prepended to the node/external detail panel:
+// a 流入/流出 legend explaining the neighborhood-highlight colors and a
+// 選択解除 button (mirrors pressing Escape / clicking empty canvas).
+var GRAPH_SELECTION_BAR_HTML =
+  '<div class="graph-selection-bar">' +
+    '<button type="button" id="graph-clear-selection-btn" class="btn">選択解除</button>' +
+    '<div class="legend">' +
+      '<span class="legend-item"><span class="swatch" style="background:#0072B2"></span>流入</span>' +
+      '<span class="legend-item"><span class="swatch" style="background:#D55E00"></span>流出</span>' +
+    '</div>' +
+  '</div>';
+
+function wireSelectionBar(panel) {
+  var btn = byId('graph-clear-selection-btn');
+  if (btn) btn.addEventListener('click', clearGraphSelection);
 }
 
 function renderGraphDetail(d) {
   var panel = byId('graph-detail');
   if (d.kind === 'external') {
     var dependents = IMPORT_EDGES.filter(function (e) { return e.dst === d.id; }).map(function (e) { return e.src; });
-    panel.innerHTML = '<h3>' + escapeHtml(d.path) + '</h3><p class="muted">外部パッケージ</p>' +
+    panel.innerHTML = GRAPH_SELECTION_BAR_HTML +
+      '<h3>' + escapeHtml(d.path) + '</h3><p class="muted">外部パッケージ</p>' +
       '<h4>依存しているファイル (' + dependents.length + ')</h4>' +
       '<ul class="dep-list">' + (dependents.map(function (f) { return '<li>' + escapeHtml(f) + '</li>'; }).join('') || '<li>-</li>') + '</ul>';
+    wireSelectionBar(panel);
     return;
   }
   var file = FILES_BY_ID.get(d.id);
@@ -1047,7 +1581,7 @@ function renderGraphDetail(d) {
   var inbound = IMPORT_EDGES.filter(function (e) { return e.dst === d.id; }).map(function (e) { return e.src; });
   var outbound = IMPORT_EDGES.filter(function (e) { return e.src === d.id; }).map(function (e) { return e.dst; });
   var symbols = DATA.symbols.filter(function (s) { return s.file_id === d.id; });
-  panel.innerHTML =
+  panel.innerHTML = GRAPH_SELECTION_BAR_HTML +
     '<h3>' + escapeHtml(d.path) + '</h3>' +
     '<p class="muted">' + escapeHtml(LANG_LABELS[d.language] || d.language) + (file && file.is_test ? ' ・ テストコード' : '') + '</p>' +
     '<table class="kv-table small">' +
@@ -1069,6 +1603,7 @@ function renderGraphDetail(d) {
     '<ul class="dep-list">' + (symbols.map(function (s) {
       return '<li>' + escapeHtml(s.name) + ' <span class="muted">(' + escapeHtml(s.kind) + ', L' + s.span.start_line + '-' + s.span.end_line + ')</span></li>';
     }).join('') || '<li>-</li>') + '</ul>';
+  wireSelectionBar(panel);
 }
 
 /* =========================================================================
@@ -1316,7 +1851,7 @@ function buildFilesMetricsRows() {
   return DATA.files.map(function (f) {
     var m = fm[f.id] || {};
     return {
-      id: f.id, path: f.path, language: LANG_LABELS[f.language] || f.language,
+      id: f.id, path: f.path, language: LANG_LABELS[f.language] || f.language, lang_raw: f.language,
       loc_code: m.loc_code, loc_comment: m.loc_comment, functions: m.functions, classes: m.classes,
       cc_total: m.cc_total, cc_max: m.cc_max, mi: m.mi, fan_in: m.fan_in, fan_out: m.fan_out,
       pagerank: m.pagerank, betweenness: m.betweenness, closeness: m.closeness,
@@ -1324,6 +1859,88 @@ function buildFilesMetricsRows() {
       churn_commits: m.churn_commits, hotspot: m.hotspot
     };
   });
+}
+
+/* ---- ファイル別メトリクス: フィルタバー (テキスト / 言語 / 閾値) ---- */
+var metricsFilterState = { text: '', langs: new Set(), thresholdCol: '', thresholdCmp: 'gte', thresholdVal: null };
+
+function initMetricsFilterState() {
+  var langs = Array.from(new Set(DATA.files.map(function (f) { return f.language; })));
+  metricsFilterState.langs = new Set(langs);
+}
+
+function renderMetricsLangPills() {
+  var langs = Array.from(new Set(DATA.files.map(function (f) { return f.language; }))).sort();
+  var el = byId('metrics-lang-pills');
+  el.innerHTML = langs.map(function (l) {
+    var checked = metricsFilterState.langs.has(l);
+    return '<label class="filter-check-label"><input type="checkbox" data-lang="' + escapeHtml(l) + '"' +
+      (checked ? ' checked' : '') + '> ' + escapeHtml(LANG_LABELS[l] || l) + '</label>';
+  }).join('');
+  qsa('input[type=checkbox]', el).forEach(function (cb) {
+    cb.addEventListener('change', function () {
+      if (cb.checked) metricsFilterState.langs.add(cb.dataset.lang);
+      else metricsFilterState.langs.delete(cb.dataset.lang);
+      renderFilesMetricsTable();
+    });
+  });
+}
+
+var metricsFilterBarWired = false;
+function wireMetricsFilterBar() {
+  if (metricsFilterBarWired) return;
+  metricsFilterBarWired = true;
+  byId('metrics-filter-text').addEventListener('input', function (e) {
+    metricsFilterState.text = e.target.value.trim().toLowerCase();
+    renderFilesMetricsTable();
+  });
+  byId('metrics-threshold-col').addEventListener('change', function (e) {
+    metricsFilterState.thresholdCol = e.target.value;
+    renderFilesMetricsTable();
+  });
+  byId('metrics-threshold-cmp').addEventListener('change', function (e) {
+    metricsFilterState.thresholdCmp = e.target.value;
+    renderFilesMetricsTable();
+  });
+  byId('metrics-threshold-val').addEventListener('input', function (e) {
+    var v = parseFloat(e.target.value);
+    metricsFilterState.thresholdVal = (e.target.value !== '' && isFinite(v)) ? v : null;
+    renderFilesMetricsTable();
+  });
+  byId('metrics-filter-clear-btn').addEventListener('click', function () {
+    metricsFilterState.text = ''; byId('metrics-filter-text').value = '';
+    metricsFilterState.thresholdCol = ''; byId('metrics-threshold-col').value = '';
+    metricsFilterState.thresholdCmp = 'gte'; byId('metrics-threshold-cmp').value = 'gte';
+    metricsFilterState.thresholdVal = null; byId('metrics-threshold-val').value = '';
+    initMetricsFilterState();
+    renderMetricsLangPills();
+    renderFilesMetricsTable();
+  });
+}
+
+function applyMetricsFilters(rows) {
+  var st = metricsFilterState;
+  return rows.filter(function (r) {
+    if (st.text && r.path.toLowerCase().indexOf(st.text) === -1) return false;
+    if (st.langs && st.langs.size && !st.langs.has(r.lang_raw)) return false;
+    if (st.thresholdCol && st.thresholdVal !== null) {
+      var v = r[st.thresholdCol];
+      if (v === undefined || v === null) return false;
+      if (st.thresholdCmp === 'gte' && !(v >= st.thresholdVal)) return false;
+      if (st.thresholdCmp === 'lte' && !(v <= st.thresholdVal)) return false;
+    }
+    return true;
+  });
+}
+
+// Inline-bar column maxima (SPEC A.2): always computed from the full,
+// unfiltered dataset so bar widths stay comparable while the user filters.
+function metricBarMaxes(allRows) {
+  return {
+    loc_code: d3.max(allRows, function (r) { return r.loc_code || 0; }) || 1,
+    cc_total: d3.max(allRows, function (r) { return r.cc_total || 0; }) || 1,
+    hotspot: d3.max(allRows, function (r) { return r.hotspot || 0; }) || 1
+  };
 }
 
 function sortRows(rows, sortSpec) {
@@ -1345,6 +1962,10 @@ function sortRows(rows, sortSpec) {
 function renderMetricsTab() {
   renderNetworkStatsCard();
   renderHotspotSection();
+  initMetricsFilterState();
+  renderMetricsLangPills();
+  wireMetricsFilterBar();
+  wireMetricsDetailPanel();
   renderFilesMetricsTable();
   renderWorstCcTable();
   renderMiHistogram();
@@ -1553,8 +2174,13 @@ function wireMetricsExportButtons() {
   });
 }
 
+var METRIC_BAR_COLUMNS = { loc_code: 'bar-loc', cc_total: 'bar-cc', hotspot: 'bar-cc' };
+
 function renderFilesMetricsTable() {
-  var rows = sortRows(buildFilesMetricsRows(), filesMetricsSort);
+  var allRows = buildFilesMetricsRows();
+  var maxes = metricBarMaxes(allRows);
+  var filteredRows = applyMetricsFilters(allRows);
+  var rows = sortRows(filteredRows, filesMetricsSort);
   var table = byId('files-metrics-table');
   var caption = '<caption class="visually-hidden">ファイル別メトリクス</caption>';
   var thead = '<thead><tr>' + FILE_METRIC_COLUMNS.map(function (c) {
@@ -1565,8 +2191,17 @@ function renderFilesMetricsTable() {
       escapeHtml(c.label) + indicator + '</button></th>';
   }).join('') + '</tr></thead>';
   var tbody = '<tbody>' + rows.map(function (r) {
-    return '<tr data-file-id="' + escapeHtml(r.id) + '">' + FILE_METRIC_COLUMNS.map(function (c) {
+    return '<tr data-file-id="' + escapeHtml(r.id) + '" tabindex="0" role="button" class="metrics-row" aria-label="' +
+      escapeHtml(r.path) + ' の詳細を開く">' + FILE_METRIC_COLUMNS.map(function (c) {
       var text = c.key === 'hotspot' ? fmtHotspot(r[c.key]) : fmt(r[c.key]);
+      var barClass = METRIC_BAR_COLUMNS[c.key];
+      if (barClass) {
+        var v = r[c.key];
+        var max = maxes[c.key] || 1;
+        var pct = (v !== undefined && v !== null && max > 0) ? Math.max(0, Math.min(100, (v / max) * 100)) : 0;
+        return '<td class="metric-cell"><span class="metric-num">' + escapeHtml(text) + '</span>' +
+          '<div class="metric-bar ' + barClass + '" aria-hidden="true" style="width:' + pct.toFixed(1) + '%"></div></td>';
+      }
       return '<td>' + escapeHtml(text) + '</td>';
     }).join('') + '</tr>';
   }).join('') + '</tbody>';
@@ -1579,6 +2214,14 @@ function renderFilesMetricsTable() {
       renderFilesMetricsTable();
     });
   });
+  qsa('tr.metrics-row', table).forEach(function (tr) {
+    tr.addEventListener('click', function () { openMetricsDetail(tr.dataset.fileId, tr); });
+    tr.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openMetricsDetail(tr.dataset.fileId, tr); }
+    });
+  });
+  var countEl = byId('metrics-filter-count');
+  if (countEl) countEl.textContent = filteredRows.length + ' / ' + allRows.length + ' 件を表示';
 }
 
 // Scrolls/highlights the files-metrics-table row for `fid` (used by the
@@ -1590,6 +2233,111 @@ function highlightMetricsRow(fid) {
   if (row) {
     row.classList.add('row-highlight');
     row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+/* ---- ファイル詳細スライドパネル (SPEC A.4) ----
+ * Opened from a files-metrics-table row (click or Enter/Space, roving
+ * tabindex is not needed here -- every row is directly tabbable since the
+ * table is virtualized by pagination-free scrolling, same as v1.4). Focus
+ * moves onto the panel on open and back to the triggering row on close. */
+var metricsDetailLastTrigger = null;
+
+function openMetricsDetail(fileId, triggerEl) {
+  metricsDetailLastTrigger = triggerEl || null;
+  var file = FILES_BY_ID.get(fileId);
+  var m = fileMetricsMap()[fileId] || {};
+  var funcs = DATA.symbols
+    .filter(function (s) { return s.file_id === fileId && (s.kind === 'function' || s.kind === 'method'); })
+    .map(function (s) { return { s: s, m: symbolMetricsMap()[s.id] || {} }; })
+    .sort(function (a, b) { return (b.m.cc || 0) - (a.m.cc || 0); });
+  var kvRows = FILE_METRIC_COLUMNS.filter(function (c) { return c.key !== 'path' && c.key !== 'language'; })
+    .map(function (c) {
+      var text = c.key === 'hotspot' ? fmtHotspot(m[c.key]) : fmt(m[c.key]);
+      return '<tr><th>' + escapeHtml(c.label) + '</th><td>' + escapeHtml(text) + '</td></tr>';
+    }).join('');
+  var funcRows = funcs.length ? funcs.map(function (r) {
+    return '<tr><td>' + escapeHtml(r.s.name) + '</td><td>' + escapeHtml(r.s.kind) + '</td><td>L' +
+      r.s.span.start_line + '-' + r.s.span.end_line + '</td><td>' + fmt(r.m.cc) + '</td><td>' + fmt(r.m.loc) +
+      '</td><td>' + fmt(r.m.params) + '</td></tr>';
+  }).join('') : '<tr><td colspan="6">関数/メソッドはありません。</td></tr>';
+  byId('metrics-detail-body').innerHTML =
+    '<p style="word-break:break-all;">' + escapeHtml((file && file.path) || fileId) + '</p>' +
+    '<p class="muted">' + escapeHtml((file && (LANG_LABELS[file.language] || file.language)) || '-') + '</p>' +
+    '<table class="kv-table small">' + kvRows + '</table>' +
+    '<h4>関数/メソッド（CC降順）</h4>' +
+    '<div class="table-scroll" tabindex="0" role="region" aria-label="スクロール可能な表"><table class="data-table detail-func-table"><thead><tr>' +
+    '<th scope="col">関数/メソッド</th><th scope="col">種別</th><th scope="col">行範囲</th>' +
+    '<th scope="col">CC</th><th scope="col">LOC</th><th scope="col">引数数</th></tr></thead><tbody>' +
+    funcRows + '</tbody></table></div>' +
+    '<div class="toolbar" style="margin-top:10px;">' +
+    '<button type="button" id="metrics-detail-graph-btn" class="btn">依存グラフで表示</button>' +
+    '<button type="button" id="metrics-detail-impact-btn" class="btn">影響範囲で開く</button>' +
+    '</div>';
+  byId('metrics-detail-graph-btn').addEventListener('click', function () { focusGraphNodeById(fileId); });
+  byId('metrics-detail-impact-btn').addEventListener('click', function () {
+    if (window.impactPreselectFile) window.impactPreselectFile(fileId);
+  });
+  byId('metrics-detail-backdrop').classList.remove('hidden');
+  var panel = byId('metrics-detail-panel');
+  panel.classList.add('open');
+  panel.focus();
+}
+
+function closeMetricsDetail() {
+  var panel = byId('metrics-detail-panel');
+  if (!panel.classList.contains('open')) return;
+  panel.classList.remove('open');
+  byId('metrics-detail-backdrop').classList.add('hidden');
+  if (metricsDetailLastTrigger) { metricsDetailLastTrigger.focus(); metricsDetailLastTrigger = null; }
+}
+
+var metricsDetailPanelWired = false;
+function wireMetricsDetailPanel() {
+  if (metricsDetailPanelWired) return;
+  metricsDetailPanelWired = true;
+  byId('metrics-detail-close-btn').addEventListener('click', closeMetricsDetail);
+  byId('metrics-detail-backdrop').addEventListener('click', closeMetricsDetail);
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') closeMetricsDetail();
+  });
+}
+
+// Cross-tab hook (SPEC A.4): switches to 依存グラフ and selects + zooms the
+// node for `fid`. If the dependency graph is currently aggregated (SPEC F7)
+// and the file's directory hasn't been expanded yet, expands it first so
+// the file-level node exists, then retries.
+function focusGraphNodeById(fid) {
+  activateTab('graph');
+  setTimeout(function () {
+    var target = graphNodesData.find(function (n) { return n.id === fid; });
+    if (!target) {
+      var file = FILES_BY_ID.get(fid);
+      var dir = file ? topDir(file.path) : null;
+      if (dir && !graphState.expandedDirs.has(dir)) {
+        graphState.expandedDirs.add(dir);
+        buildAndRenderGraph();
+        setTimeout(function () {
+          var retry = graphNodesData.find(function (n) { return n.id === fid; });
+          if (retry) { onNodeClick(retry); zoomToGraphNode(retry); }
+        }, 60);
+        return;
+      }
+    }
+    if (target) { onNodeClick(target); zoomToGraphNode(target); }
+  }, 60);
+}
+
+function zoomToGraphNode(node) {
+  if (!graphZoom || !graphSvgSel || node.x === undefined || node.y === undefined) return;
+  var scale = Math.max(graphCurrentZoomK, 1.6);
+  var tx = graphWidth / 2 - scale * node.x;
+  var ty = graphHeight / 2 - scale * node.y;
+  var transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+  if (prefersReducedMotion()) {
+    graphSvgSel.call(graphZoom.transform, transform);
+  } else {
+    graphSvgSel.transition().duration(400).call(graphZoom.transform, transform);
   }
 }
 
@@ -1701,40 +2449,96 @@ function groupAffectedByHop(affectedFiles) {
   return Array.from(groups.entries()).sort(function (a, b) { return a[0] - b[0]; });
 }
 
-function renderAffectedFilesSection(affectedFiles, clickable) {
-  if (!affectedFiles.length) return '<div class="panel"><p>影響を受けるファイルはありません。</p></div>';
+/* ---- 結果フィルタ (確信度 / via) + CSV/JSON エクスポート (SPEC B.8) ----
+ * Shared by all three affected-files renderers (precomputed / source-flow /
+ * fallback-interactive). `prefix` namespaces element ids ('pc' | 'sf' | 'fb')
+ * and holds independent, per-tab filter state so switching modes never
+ * cross-contaminates filters. */
+var RESULT_FILTER_STATE = {};
+var CONFIDENCE_PILLS = [['all', 'すべて'], ['certain', '確実のみ'], ['inferred', '推定を含む']];
+var VIA_CHECKS = [['call', '呼び出し'], ['import', 'インポート'], ['dataflow', 'データフロー']];
+
+function defaultResultFilterState() {
+  return { confidence: 'all', via: { call: true, import: true, dataflow: true } };
+}
+
+function viaCategory(via) {
+  if (via === 'call' || via === 'inherit') return 'call';
+  if (via === 'import') return 'import';
+  return 'dataflow';
+}
+
+function symbolPassesConfidence(conf, mode) {
+  if (mode === 'certain') return conf === 'certain';
+  if (mode === 'inferred') return conf === 'certain' || conf === 'inferred';
+  return true; // 'all'
+}
+
+function filterAffectedFiles(affectedFiles, state) {
+  return affectedFiles.map(function (af) {
+    var symbols = (af.symbols || []).filter(function (s) {
+      return symbolPassesConfidence(s.confidence, state.confidence) && state.via[viaCategory(s.via)];
+    });
+    return { file_id: af.file_id, symbols: symbols };
+  }).filter(function (af) { return af.symbols.length > 0; });
+}
+
+function buildImpactCsv(affectedFiles) {
+  var lines = ['file,symbol,lines,confidence,via,hops'];
+  affectedFiles.forEach(function (af) {
+    af.symbols.forEach(function (s) {
+      lines.push([
+        af.file_id, s.symbol_id, (s.lines || []).join(' '), s.confidence, s.via || '',
+        (s.hops !== undefined && s.hops !== null) ? s.hops : ''
+      ].map(csvEscapeField).join(','));
+    });
+  });
+  return lines.join('\r\n') + '\r\n';
+}
+
+// Renders the grouped-by-hop affected-file list. Each file is wrapped in a
+// <details> (SPEC B.8): open by default for hop<=1, collapsed for deeper
+// hops, so a large result stays scannable without hiding the close matches.
+// A11y (axe nested-interactive): <summary> is itself an interactive element,
+// so it must contain only non-interactive content (path text + count span).
+// The "show source" action is therefore a separate button rendered as the
+// FIRST element inside the details body, never nested inside the summary.
+function affectedFilesListHtml(affectedFiles, clickable) {
+  if (!affectedFiles.length) return '<p class="muted">条件に一致する影響ファイルはありません。</p>';
   var groups = groupAffectedByHop(affectedFiles);
-  var html = '<div class="panel"><h2>影響を受けるファイル</h2>';
-  if (clickable) html += '<p class="note">ファイル名をクリックすると，そのファイルの影響コードをソースビューアに表示します（ソースが埋め込まれている場合）。</p>';
+  var html = '';
   groups.forEach(function (g) {
     var hop = g[0], files = g[1];
-    html += '<h3>ホップ ' + hop + '</h3><ul class="dep-list">';
+    html += '<h3>ホップ ' + hop + '</h3>';
     files.forEach(function (af) {
       var isClickable = clickable && fileHasSource(af.file_id);
-      var nameHtml = isClickable
-        ? '<button type="button" class="affected-file-row" data-file="' + escapeHtml(af.file_id) +
-          '" title="クリックしてこのファイルのソースを表示">' + escapeHtml(af.file_id) + '</button>'
-        : '<strong>' + escapeHtml(af.file_id) + '</strong>';
-      html += '<li>' + nameHtml + '<ul class="symbol-list">';
-      (af.symbols || []).forEach(function (s) {
+      html += '<details class="affected-file-details"' + (hop <= 1 ? ' open' : '') + '>' +
+        '<summary><strong>' + escapeHtml(af.file_id) + '</strong> <span class="muted">(' +
+        af.symbols.length + ')</span></summary>';
+      if (isClickable) {
+        html += '<button type="button" class="btn affected-file-row" data-file="' + escapeHtml(af.file_id) +
+          '" title="このファイルの影響コードをソースビューアに表示">ソースを表示</button>';
+      }
+      html += '<ul class="symbol-list">';
+      af.symbols.forEach(function (s) {
         html += '<li>' + escapeHtml(s.symbol_id) + ' ' + confidenceBadge(s.confidence) +
           ' <span class="muted">via ' + escapeHtml(s.via || '-') + ', L' + (s.lines || []).join(',') + '</span></li>';
       });
-      html += '</ul></li>';
+      html += '</ul></details>';
     });
-    html += '</ul>';
   });
-  html += '</div>';
   return html;
 }
 
-// Wires click handlers on ".affected-file-row" elements rendered by
-// renderAffectedFilesSection(..., true) so each row opens that file's
-// affected lines in a source viewer (ctx selects which viewer/back-button
-// pair to use: 'sf' = source-flow tab, 'pc' = precomputed-impact tab).
+// Wires click handlers on ".affected-file-row" (ソースを表示) buttons so
+// each opens that file's affected lines in a source viewer (ctx selects
+// which viewer/back-button pair to use: 'sf' = source-flow tab, 'pc' =
+// precomputed-impact tab).
 function wireAffectedFileRows(rootEl, ctx, affectedFiles) {
   qsa('.affected-file-row', rootEl).forEach(function (el) {
-    el.addEventListener('click', function () {
+    el.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
       var fid = el.dataset.file;
       var af = affectedFiles.find(function (a) { return a.file_id === fid; });
       var lines = new Set();
@@ -1743,6 +2547,89 @@ function wireAffectedFileRows(rootEl, ctx, affectedFiles) {
       else openPcAffectedFile(fid, lines);
     });
   });
+}
+
+// Builds the panel markup: header, filter bar (confidence pills + via
+// checkboxes + CSV/JSON export), and an initial (unfiltered) file list.
+function renderAffectedFilesSection(prefix, affectedFiles, clickable) {
+  if (!affectedFiles.length) return '<div class="panel"><h2>影響を受けるファイル</h2><p>影響を受けるファイルはありません。</p></div>';
+  if (!RESULT_FILTER_STATE[prefix]) RESULT_FILTER_STATE[prefix] = defaultResultFilterState();
+  var html = '<div class="panel"><h2>影響を受けるファイル</h2>';
+  if (clickable) html += '<p class="note">各ファイルの「ソースを表示」ボタンで，そのファイルの影響コードをソースビューアに表示します（ソースが埋め込まれている場合）。</p>';
+  html += '<div class="toolbar result-filter-bar">' +
+    '<div class="filter-pill-group" role="radiogroup" aria-label="確信度で絞り込み" id="' + prefix + '-conf-pills"></div>' +
+    '<div class="filter-check-group" role="group" aria-label="種別で絞り込み" id="' + prefix + '-via-checks"></div>' +
+    '<button type="button" class="btn" id="' + prefix + '-export-csv-btn">結果をCSVダウンロード</button>' +
+    '<button type="button" class="btn" id="' + prefix + '-export-json-btn">結果をJSONダウンロード</button>' +
+    '<span id="' + prefix + '-filter-count" class="muted" aria-live="polite"></span>' +
+    '</div>';
+  html += '<div id="' + prefix + '-affected-list">' + affectedFilesListHtml(affectedFiles, clickable) + '</div>';
+  html += '</div>';
+  return html;
+}
+
+// Wires the filter bar produced by renderAffectedFilesSection(prefix, ...)
+// once its HTML has been inserted into the DOM. `fullResult` is the whole
+// result object exported verbatim by 結果をJSONダウンロード; `rowCtx` is
+// forwarded to wireAffectedFileRows ('sf' | 'pc').
+function wireAffectedFilesSection(prefix, affectedFiles, clickable, fullResult, rowCtx) {
+  if (!affectedFiles.length) return;
+  var state = RESULT_FILTER_STATE[prefix];
+  var pillsEl = byId(prefix + '-conf-pills');
+  var checksEl = byId(prefix + '-via-checks');
+
+  function rerenderList() {
+    var filtered = filterAffectedFiles(affectedFiles, state);
+    var listEl = byId(prefix + '-affected-list');
+    listEl.innerHTML = affectedFilesListHtml(filtered, clickable);
+    if (clickable) wireAffectedFileRows(listEl, rowCtx, filtered);
+    var totalSymbols = affectedFiles.reduce(function (s, af) { return s + af.symbols.length; }, 0);
+    var shownSymbols = filtered.reduce(function (s, af) { return s + af.symbols.length; }, 0);
+    var countEl = byId(prefix + '-filter-count');
+    if (countEl) countEl.textContent = shownSymbols + ' / ' + totalSymbols + ' 件を表示';
+    return filtered;
+  }
+
+  if (pillsEl) {
+    pillsEl.innerHTML = CONFIDENCE_PILLS.map(function (p) {
+      var active = state.confidence === p[0];
+      return '<button type="button" class="btn filter-pill' + (active ? ' active' : '') + '" data-conf="' + p[0] +
+        '" role="radio" aria-checked="' + active + '">' + escapeHtml(p[1]) + '</button>';
+    }).join('');
+    qsa('button', pillsEl).forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        state.confidence = btn.dataset.conf;
+        qsa('button', pillsEl).forEach(function (b) {
+          var on = b === btn;
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-checked', on ? 'true' : 'false');
+        });
+        rerenderList();
+      });
+    });
+  }
+  if (checksEl) {
+    checksEl.innerHTML = VIA_CHECKS.map(function (v) {
+      return '<label class="filter-check-label"><input type="checkbox" data-via="' + v[0] + '"' +
+        (state.via[v[0]] ? ' checked' : '') + '> ' + escapeHtml(v[1]) + '</label>';
+    }).join('');
+    qsa('input[type=checkbox]', checksEl).forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        state.via[cb.dataset.via] = cb.checked;
+        rerenderList();
+      });
+    });
+  }
+  var csvBtn = byId(prefix + '-export-csv-btn');
+  var jsonBtn = byId(prefix + '-export-json-btn');
+  if (csvBtn) csvBtn.addEventListener('click', function () {
+    downloadBlob(buildImpactCsv(filterAffectedFiles(affectedFiles, state)), 'impact_result.csv', 'text/csv;charset=utf-8');
+  });
+  if (jsonBtn) jsonBtn.addEventListener('click', function () {
+    downloadBlob(JSON.stringify(fullResult, null, 2), 'impact_result.json', 'application/json;charset=utf-8');
+  });
+  if (clickable) wireAffectedFileRows(byId(prefix + '-affected-list'), rowCtx, affectedFiles);
+  rerenderList();
 }
 
 var pcViewer = { originFileId: null, originStart: null, originEnd: null };
@@ -1762,7 +2649,7 @@ function renderPrecomputedImpact(impact) {
     '<tr><th>影響シンボル数</th><td>' + fmt(stats.symbols) + '</td></tr>' +
     '<tr><th>最大深度到達</th><td>' + (stats.max_hops_reached ? 'はい（一部切り捨てられています）' : 'いいえ') + '</td></tr>' +
     '</table></div>';
-  html += renderAffectedFilesSection(impact.affected_files || [], showViewer);
+  html += renderAffectedFilesSection('pc', impact.affected_files || [], showViewer);
   if (impact.unresolved_boundaries && impact.unresolved_boundaries.length) {
     html += '<div class="panel"><h2>未解決境界 (Unresolved Boundaries)</h2><ul class="dep-list warn-list">' +
       impact.unresolved_boundaries.map(function (b) {
@@ -1773,7 +2660,10 @@ function renderPrecomputedImpact(impact) {
   if (showViewer) {
     html += '<div class="panel"><h2>ソースビューア</h2>' +
       '<div class="toolbar"><span id="impact-pc-viewer-filename" class="muted"></span>' +
-      '<button id="impact-pc-back-btn" class="btn hidden">起点に戻る</button></div>' +
+      '<button id="impact-pc-back-btn" class="btn hidden">起点に戻る</button>' +
+      '<label class="visually-hidden" for="impact-pc-jump-line">行番号へ移動</label>' +
+      '<input type="number" id="impact-pc-jump-line" min="1" placeholder="行番号" style="width:110px">' +
+      '<button type="button" id="impact-pc-jump-btn" class="btn">移動</button></div>' +
       '<div id="impact-pc-viewer" class="source-viewer"></div></div>';
   }
   el.innerHTML = html;
@@ -1785,7 +2675,8 @@ function renderPrecomputedImpact(impact) {
     pcViewer.originFileId = query.file;
     pcViewer.originStart = query.start_line;
     pcViewer.originEnd = query.end_line || query.start_line;
-    wireAffectedFileRows(el, 'pc', impact.affected_files || []);
+    wireAffectedFilesSection('pc', impact.affected_files || [], showViewer, impact, 'pc');
+    wireJumpToLine('impact-pc-jump-line', 'impact-pc-jump-btn', 'impact-pc-viewer');
     byId('impact-pc-back-btn').addEventListener('click', function () {
       byId('impact-pc-back-btn').classList.add('hidden');
       showPcOriginView();
@@ -1814,13 +2705,160 @@ function openPcAffectedFile(fid, impactLines) {
   renderSourceViewerInto('impact-pc-viewer', null, fid, { impactLines: impactLines, selectable: false });
 }
 
+/* ---- Lightweight syntax highlighting (SPEC B.7) ----
+ * Regex-based line tokenizer -- no external lib. Comments, strings and
+ * numbers are recognized across the small language set this tool parses;
+ * block comments (/* ... *\/) carry a boolean "were we inside one at the
+ * end of the previous line" state across lines, which is enough to handle
+ * multi-line /* *\/ blocks without a full lexer. Everything is escaped
+ * per-segment (never tokenize-after-escape, which would let markup produced
+ * by escaping get re-interpreted as code punctuation).
+ */
+var BLOCK_COMMENT_LANGS = new Set(['javascript', 'typescript', 'c', 'cpp', 'java']);
+var JS_KEYWORDS = ['function', 'return', 'const', 'let', 'var', 'if', 'else', 'for', 'while', 'do', 'switch',
+  'case', 'break', 'continue', 'class', 'extends', 'new', 'this', 'typeof', 'instanceof', 'try', 'catch',
+  'finally', 'throw', 'import', 'export', 'default', 'from', 'async', 'await', 'yield', 'null', 'undefined',
+  'true', 'false', 'of', 'in', 'static', 'get', 'set', 'void', 'delete'];
+var TS_KEYWORDS = JS_KEYWORDS.concat(['interface', 'type', 'implements', 'enum', 'public', 'private',
+  'protected', 'readonly', 'namespace', 'declare', 'as', 'is', 'abstract']);
+var C_KEYWORDS = ['int', 'char', 'float', 'double', 'void', 'short', 'long', 'unsigned', 'signed', 'struct',
+  'union', 'enum', 'typedef', 'static', 'const', 'extern', 'return', 'if', 'else', 'for', 'while', 'do',
+  'switch', 'case', 'break', 'continue', 'sizeof', 'goto', 'include', 'define'];
+var CPP_KEYWORDS = C_KEYWORDS.concat(['class', 'public', 'private', 'protected', 'virtual', 'template',
+  'typename', 'namespace', 'using', 'new', 'delete', 'this', 'friend', 'operator', 'try', 'catch', 'throw',
+  'nullptr', 'true', 'false', 'auto', 'constexpr', 'override']);
+var JAVA_KEYWORDS = ['public', 'private', 'protected', 'class', 'interface', 'extends', 'implements',
+  'static', 'final', 'void', 'int', 'char', 'double', 'float', 'boolean', 'long', 'short', 'byte', 'new',
+  'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'try', 'catch',
+  'finally', 'throw', 'throws', 'import', 'package', 'this', 'super', 'null', 'true', 'false', 'abstract',
+  'synchronized', 'enum'];
+var PY_KEYWORDS = ['def', 'class', 'return', 'import', 'from', 'as', 'if', 'elif', 'else', 'for', 'while',
+  'try', 'except', 'finally', 'with', 'pass', 'break', 'continue', 'lambda', 'yield', 'global', 'nonlocal',
+  'not', 'and', 'or', 'in', 'is', 'None', 'True', 'False', 'self', 'raise', 'assert', 'async', 'await', 'del'];
+var LANG_KEYWORD_SETS = {
+  python: new Set(PY_KEYWORDS), javascript: new Set(JS_KEYWORDS), typescript: new Set(TS_KEYWORDS),
+  c: new Set(C_KEYWORDS), cpp: new Set(CPP_KEYWORDS), java: new Set(JAVA_KEYWORDS)
+};
+var NUMBER_RE = /^\d+(\.\d+)?([eE][+-]?\d+)?[a-zA-Z]?/;
+var IDENT_RE = /^[A-Za-z0-9_$]+/;
+
+// Tokenizes one raw (un-escaped) source line into an HTML string of
+// <span class="tok-...">escaped-segment</span> pieces, given the language
+// and whether the *previous* line ended inside an unterminated block
+// comment. Returns { html, state } where state is the block-comment flag to
+// pass in for the next line.
+function tokenizeLine(text, lang, inBlockComment) {
+  var out = '';
+  var i = 0;
+  var n = text.length;
+  var hasBlock = BLOCK_COMMENT_LANGS.has(lang);
+  var lineCommentTok = lang === 'python' ? '#' : '//';
+  var kw = LANG_KEYWORD_SETS[lang];
+  var plainStart = 0;
+
+  function flushPlain(end) {
+    if (end > plainStart) out += escapeHtml(text.slice(plainStart, end));
+  }
+
+  if (inBlockComment) {
+    var closeIdx = text.indexOf('*/');
+    if (closeIdx === -1) return { html: '<span class="tok-comment">' + escapeHtml(text) + '</span>', state: true };
+    out += '<span class="tok-comment">' + escapeHtml(text.slice(0, closeIdx + 2)) + '</span>';
+    i = closeIdx + 2;
+    plainStart = i;
+    inBlockComment = false;
+  }
+
+  while (i < n) {
+    var c = text[i];
+    if (lineCommentTok && text.indexOf(lineCommentTok, i) === i) {
+      flushPlain(i);
+      out += '<span class="tok-comment">' + escapeHtml(text.slice(i)) + '</span>';
+      plainStart = n;
+      break;
+    }
+    if (hasBlock && text.indexOf('/*', i) === i) {
+      flushPlain(i);
+      var end = text.indexOf('*/', i + 2);
+      if (end === -1) {
+        out += '<span class="tok-comment">' + escapeHtml(text.slice(i)) + '</span>';
+        plainStart = n;
+        inBlockComment = true;
+        break;
+      }
+      out += '<span class="tok-comment">' + escapeHtml(text.slice(i, end + 2)) + '</span>';
+      i = end + 2;
+      plainStart = i;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      flushPlain(i);
+      var quote = c;
+      var j = i + 1;
+      while (j < n) {
+        if (text[j] === '\\') { j += 2; continue; }
+        if (text[j] === quote) { j++; break; }
+        j++;
+      }
+      out += '<span class="tok-string">' + escapeHtml(text.slice(i, j)) + '</span>';
+      i = j; plainStart = j;
+      continue;
+    }
+    if (c >= '0' && c <= '9' && (i === 0 || IDENT_RE.test(text[i - 1]) === false)) {
+      var numMatch = NUMBER_RE.exec(text.slice(i));
+      if (numMatch) {
+        flushPlain(i);
+        out += '<span class="tok-number">' + escapeHtml(numMatch[0]) + '</span>';
+        i += numMatch[0].length; plainStart = i;
+        continue;
+      }
+    }
+    if (/[A-Za-z_$]/.test(c)) {
+      var word = IDENT_RE.exec(text.slice(i))[0];
+      if (kw && kw.has(word)) {
+        flushPlain(i);
+        out += '<span class="tok-keyword">' + escapeHtml(word) + '</span>';
+        i += word.length; plainStart = i;
+        continue;
+      }
+      i += word.length;
+      continue;
+    }
+    i++;
+  }
+  flushPlain(n);
+  return { html: out, state: inBlockComment };
+}
+
+// Per-file tokenization cache: the source of a given fileId never changes
+// within a report, so each file is tokenized at most once regardless of how
+// many times its viewer is re-rendered (selection changes re-render every
+// row -- see renderSourceViewerInto below).
+var TOKENIZED_LINES_CACHE = new Map();
+function getTokenizedLines(fileId) {
+  if (TOKENIZED_LINES_CACHE.has(fileId)) return TOKENIZED_LINES_CACHE.get(fileId);
+  var file = FILES_BY_ID.get(fileId);
+  var lang = file ? file.language : '';
+  var rawLines = DATA.sources[fileId].split(/\r\n|\r|\n/);
+  var state = false;
+  var out = new Array(rawLines.length);
+  for (var i = 0; i < rawLines.length; i++) {
+    var res = tokenizeLine(rawLines[i], lang, state);
+    out[i] = res.html;
+    state = res.state;
+  }
+  TOKENIZED_LINES_CACHE.set(fileId, out);
+  return out;
+}
+
 /* ---- Shared read-only/selectable source viewer renderer ----
- * Renders `DATA.sources[fileId]` (line numbers + escaped code) into the
- * element `containerId`. Optionally highlights a selection range, a set of
- * "impact" lines, and a set of "dataflow" (def/use) lines with distinct
- * colors (see .src-line-selected / .src-line-impact / .src-line-dataflow).
- * When opts.selectable is set, clicking a line invokes opts.onSelect(lineNo,
- * shiftKey) so callers can implement click / shift-click range selection.
+ * Renders `DATA.sources[fileId]` (line numbers + syntax-highlighted code)
+ * into the element `containerId`. Optionally highlights a selection range, a
+ * set of "impact" lines, and a set of "dataflow" (def/use) lines with
+ * distinct colors (see .src-line-selected / .src-line-impact /
+ * .src-line-dataflow). When opts.selectable is set, clicking a line invokes
+ * opts.onSelect(lineNo, shiftKey) so callers can implement click /
+ * shift-click range selection.
  */
 function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
   opts = opts || {};
@@ -1832,7 +2870,7 @@ function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
     container._srcViewerOpts = null;
     return;
   }
-  var lines = DATA.sources[fileId].split(/\r\n|\r|\n/);
+  var tokenizedLines = getTokenizedLines(fileId);
   var selRange = opts.selectionRange || null;
   var impactLines = opts.impactLines || new Set();
   var dataflowLines = opts.dataflowLines || new Set();
@@ -1843,14 +2881,14 @@ function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
   var hadFocus = container.contains(document.activeElement);
   var prevFocusedLine = (hadFocus && document.activeElement.dataset) ? parseInt(document.activeElement.dataset.line, 10) : null;
 
-  container.innerHTML = lines.map(function (text, idx) {
+  container.innerHTML = tokenizedLines.map(function (html, idx) {
     var lineNo = idx + 1;
     var cls = ['src-line'];
     if (selRange && lineNo >= selRange[0] && lineNo <= selRange[1]) cls.push('src-line-selected');
     if (impactLines.has(lineNo)) cls.push('src-line-impact');
     if (dataflowLines.has(lineNo)) cls.push('src-line-dataflow');
     return '<div class="' + cls.join(' ') + '" data-line="' + lineNo + '" tabindex="-1">' +
-      '<span class="src-lineno">' + lineNo + '</span><span class="src-code">' + escapeHtml(text) + '</span></div>';
+      '<span class="src-lineno">' + lineNo + '</span><span class="src-code">' + html + '</span></div>';
   }).join('');
 
   // Roving tabindex: only one line is ever tabbable at a time (thousands of
@@ -1858,7 +2896,7 @@ function renderSourceViewerInto(containerId, filenameElId, fileId, opts) {
   // the shared keydown handler wired below.
   var rovingLine = prevFocusedLine || (selRange && selRange[1]) || 1;
   if (rovingLine < 1) rovingLine = 1;
-  if (rovingLine > lines.length) rovingLine = lines.length;
+  if (rovingLine > tokenizedLines.length) rovingLine = tokenizedLines.length;
   var rovingRow = container.querySelector('.src-line[data-line="' + rovingLine + '"]');
   if (rovingRow) {
     rovingRow.tabIndex = 0;
@@ -2108,20 +3146,154 @@ var srcFlow = {
   depth: 10, lastOrigin: null, lastDataflowFileId: null, lastDataflowLines: null
 };
 
-function setupSourceFlowImpact() {
-  var picker = byId('impact-file-picker');
+/* ---- 対象ファイル コンボボックス (SPEC B.5) ----
+ * A text-input + filtered-listbox combobox pattern (WAI-ARIA "combobox with
+ * list autocomplete"): typing filters the option list by substring (max 50
+ * shown); Up/Down move the active option, Enter selects it, click selects
+ * it. Replaces the old plain <select> + separate filter <input> pair. */
+var IMPACT_COMBO_MAX = 50;
+var impactComboState = { open: false, filtered: [], activeIndex: -1 };
+
+function comboFileLabel(f) {
+  return f.path + (fileHasSource(f.id) ? '' : '  [ソース未埋込]');
+}
+
+function setImpactComboValue(fid) {
+  var input = byId('impact-file-combo');
+  if (!input) return;
+  var f = fid ? FILES_BY_ID.get(fid) : null;
+  input.value = f ? comboFileLabel(f) : '';
+}
+
+function renderImpactCombobox(term) {
+  var listbox = byId('impact-file-listbox');
+  var t = (term || '').trim().toLowerCase();
   var files = sortedFilesByPath();
-  picker.innerHTML = files.map(function (f) {
-    return '<option value="' + escapeHtml(f.id) + '">' + escapeHtml(f.path) +
-      (fileHasSource(f.id) ? '' : '  [ソース未埋込]') + '</option>';
-  }).join('');
-  byId('impact-file-filter').addEventListener('input', function (e) {
-    var term = e.target.value.trim().toLowerCase();
-    qsa('option', picker).forEach(function (opt) {
-      opt.classList.toggle('hidden', term !== '' && opt.textContent.toLowerCase().indexOf(term) === -1);
-    });
+  var filtered = t ? files.filter(function (f) { return f.path.toLowerCase().indexOf(t) !== -1; }) : files;
+  filtered = filtered.slice(0, IMPACT_COMBO_MAX);
+  impactComboState.filtered = filtered;
+  impactComboState.activeIndex = filtered.length ? 0 : -1;
+  listbox.innerHTML = filtered.length
+    ? filtered.map(function (f, i) {
+        return '<li role="option" id="impact-combo-opt-' + i + '" data-file-id="' + escapeHtml(f.id) +
+          '" class="combobox-option">' + escapeHtml(comboFileLabel(f)) + '</li>';
+      }).join('')
+    : '<li class="combobox-option combobox-empty" aria-disabled="true">一致するファイルがありません</li>';
+  updateImpactComboActiveDescendant();
+}
+
+function updateImpactComboActiveDescendant() {
+  var input = byId('impact-file-combo');
+  qsa('.combobox-option', byId('impact-file-listbox')).forEach(function (li, i) {
+    var active = i === impactComboState.activeIndex;
+    li.classList.toggle('combobox-active', active);
+    li.setAttribute('aria-selected', active ? 'true' : 'false');
   });
-  picker.addEventListener('change', function () { selectSrcFlowFile(picker.value); });
+  if (impactComboState.filtered[impactComboState.activeIndex]) {
+    input.setAttribute('aria-activedescendant', 'impact-combo-opt-' + impactComboState.activeIndex);
+  } else {
+    input.removeAttribute('aria-activedescendant');
+  }
+}
+
+function openImpactCombobox() {
+  impactComboState.open = true;
+  byId('impact-file-combo').setAttribute('aria-expanded', 'true');
+  byId('impact-file-listbox').classList.remove('hidden');
+}
+function closeImpactCombobox() {
+  impactComboState.open = false;
+  byId('impact-file-combo').setAttribute('aria-expanded', 'false');
+  byId('impact-file-listbox').classList.add('hidden');
+}
+function selectImpactComboIndex(i) {
+  var f = impactComboState.filtered[i];
+  if (!f) return;
+  closeImpactCombobox();
+  selectSrcFlowFile(f.id);
+}
+
+function wireImpactCombobox() {
+  var input = byId('impact-file-combo');
+  var listbox = byId('impact-file-listbox');
+  input.addEventListener('focus', function () { renderImpactCombobox(''); openImpactCombobox(); });
+  input.addEventListener('input', function () { renderImpactCombobox(input.value); openImpactCombobox(); });
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      if (!impactComboState.open) { renderImpactCombobox(''); openImpactCombobox(); }
+      else impactComboState.activeIndex = Math.min(impactComboState.filtered.length - 1, impactComboState.activeIndex + 1);
+      updateImpactComboActiveDescendant();
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      impactComboState.activeIndex = Math.max(0, impactComboState.activeIndex - 1);
+      updateImpactComboActiveDescendant();
+    } else if (ev.key === 'Enter') {
+      if (impactComboState.open && impactComboState.activeIndex >= 0) {
+        ev.preventDefault();
+        selectImpactComboIndex(impactComboState.activeIndex);
+      }
+    } else if (ev.key === 'Escape') {
+      closeImpactCombobox();
+    }
+  });
+  listbox.addEventListener('click', function (ev) {
+    var li = ev.target.closest ? ev.target.closest('.combobox-option') : null;
+    if (!li || !li.dataset.fileId) return;
+    var idx = impactComboState.filtered.findIndex(function (f) { return f.id === li.dataset.fileId; });
+    if (idx !== -1) selectImpactComboIndex(idx);
+  });
+  document.addEventListener('click', function (ev) {
+    var wrap = document.querySelector('.impact-combobox-wrap');
+    if (impactComboState.open && wrap && !wrap.contains(ev.target)) closeImpactCombobox();
+  });
+}
+
+/* ---- 行番号へ移動 (SPEC B.6) ----
+ * Scrolls the given source-viewer container to `lineNo` and moves the
+ * roving-tabindex focus there (mirrors keyboard Home/End navigation). */
+function scrollAndFocusLine(containerId, lineNo) {
+  var container = byId(containerId);
+  if (!container) return;
+  var row = container.querySelector('.src-line[data-line="' + lineNo + '"]');
+  if (!row) return;
+  qsa('.src-line', container).forEach(function (r) { r.tabIndex = -1; });
+  row.tabIndex = 0;
+  row.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  row.focus();
+}
+
+function wireJumpToLine(inputId, btnId, viewerContainerId) {
+  var input = byId(inputId);
+  var btn = byId(btnId);
+  if (!input || !btn) return;
+  function jump() {
+    var n = parseInt(input.value, 10);
+    if (isFinite(n) && n >= 1) scrollAndFocusLine(viewerContainerId, n);
+  }
+  btn.addEventListener('click', jump);
+  input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); jump(); } });
+}
+
+// Cross-tab prefill hook (SPEC B.5): switches to 影響範囲 and preselects
+// `fileId` in the source-flow file combobox (or the fallback <select> when
+// no sources are embedded at all). Called from the メトリクス file-detail
+// panel's 影響範囲で開く button.
+window.impactPreselectFile = function (fileId) {
+  activateTab('impact');
+  setTimeout(function () {
+    if (hasEmbeddedSources()) {
+      selectSrcFlowFile(fileId);
+    } else if (!DATA.impact) {
+      var sel = byId('impact-file-select');
+      if (sel) sel.value = fileId;
+    }
+  }, 60);
+};
+
+function setupSourceFlowImpact() {
+  var files = sortedFilesByPath();
+  wireImpactCombobox();
   var depthInput = byId('impact-depth-input');
   var depthValue = byId('impact-depth-value');
   depthInput.addEventListener('input', function () {
@@ -2131,13 +3303,14 @@ function setupSourceFlowImpact() {
   byId('impact-range-clear-btn').addEventListener('click', clearSrcFlowRange);
   byId('impact-back-origin-btn').addEventListener('click', backToSrcFlowOrigin);
   byId('impact-run-btn').addEventListener('click', runSrcFlowImpact);
+  wireJumpToLine('impact-jump-line', 'impact-jump-btn', 'impact-source-viewer');
   selectSrcFlowFile(files.length ? files[0].id : null);
 }
 
 function selectSrcFlowFile(fid) {
   srcFlow.fileId = fid;
   srcFlow.anchorLine = null; srcFlow.startLine = null; srcFlow.endLine = null; srcFlow.rangeComplete = false;
-  if (fid) byId('impact-file-picker').value = fid;
+  setImpactComboValue(fid);
   byId('impact-back-origin-btn').classList.add('hidden');
   renderSrcFlowViewerState();
 }
@@ -2201,14 +3374,14 @@ function backToSrcFlowOrigin() {
   var o = srcFlow.lastOrigin;
   if (o) {
     srcFlow.fileId = o.fileId;
-    if (fileHasSource(o.fileId)) byId('impact-file-picker').value = o.fileId;
+    if (fileHasSource(o.fileId)) setImpactComboValue(o.fileId);
   }
   renderSrcFlowViewerState();
 }
 
 function openSrcFlowAffectedFile(fid, impactLines) {
   srcFlow.fileId = fid;
-  if (fileHasSource(fid)) byId('impact-file-picker').value = fid;
+  if (fileHasSource(fid)) setImpactComboValue(fid);
   byId('impact-back-origin-btn').classList.remove('hidden');
   renderSourceViewerInto('impact-source-viewer', 'impact-viewer-filename', fid, { impactLines: impactLines, selectable: false });
   byId('impact-selection-label').textContent = escapeHtml(fid) + ' の影響コード（' + impactLines.size + ' 行）';
@@ -2252,11 +3425,11 @@ function renderSrcFlowResult(fileId, startLine, endLine, depth, result) {
   var el = byId('impact-src-result');
   var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
     impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
-  html += renderAffectedFilesSection(result.affected_files, true);
+  html += renderAffectedFilesSection('sf', result.affected_files, true);
   html += unresolvedBoundariesHtml(result.unresolved_boundaries);
   html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-sf"></svg></div>';
   el.innerHTML = html;
-  wireAffectedFileRows(el, 'sf', result.affected_files);
+  wireAffectedFilesSection('sf', result.affected_files, true, result, 'sf');
   var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
   highlighted.add(fileId);
   renderMiniGraph('impact-mini-graph-sf', highlighted);
@@ -2301,10 +3474,11 @@ function renderFallbackImpactResult(fileId, startLine, endLine, depth, result) {
   var el = byId('impact-result-fb');
   var html = '<div class="panel"><h2>起点</h2><table class="kv-table">' +
     impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
-  html += renderAffectedFilesSection(result.affected_files, false);
+  html += renderAffectedFilesSection('fb', result.affected_files, false);
   html += unresolvedBoundariesHtml(result.unresolved_boundaries);
   html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-fb"></svg></div>';
   el.innerHTML = html;
+  wireAffectedFilesSection('fb', result.affected_files, false, result, 'fb');
   var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
   highlighted.add(fileId);
   renderMiniGraph('impact-mini-graph-fb', highlighted);

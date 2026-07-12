@@ -518,3 +518,174 @@ def test_template_inline_script_is_valid_js(tmp_path):
         [node, "--check", str(script_path)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+# ---------------------------------------------------------------------------
+# GRAPH-UX: dependency-graph tab improvements (neighborhood highlight, edge
+# direction/tooltips, label declutter, search zoom, drag pin, overview card
+# links, URL hash tab state)
+# ---------------------------------------------------------------------------
+def test_template_has_edge_direction_markers():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # SVG arrowhead markers wired via marker-end, one per link visual state.
+    assert "marker-end" in text
+    assert ".append('marker')" in text
+    assert "'arrow-' +" in text
+    assert "LINK_COLORS" in text
+
+
+def test_template_has_neighborhood_selection_controls():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # 選択解除 button + 流入/流出 legend rendered into the graph detail panel
+    # on node selection, plus Escape-to-clear.
+    assert "選択解除" in text
+    assert "graph-clear-selection-btn" in text
+    assert "流入" in text and "流出" in text
+    assert "clearGraphSelection" in text
+    assert "'Escape'" in text
+
+
+def test_template_has_drag_pin_controls():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="graph-unpin-btn"' in text
+    assert "固定を全解除" in text
+    assert "pin-ring" in text
+
+
+def test_template_has_search_zoom_controls():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="graph-search-count"' in text
+    assert "zoomToSearchMatches" in text
+
+
+def test_template_has_overview_card_links():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "card-link" in text
+    assert "handleOverviewCardLink" in text
+
+
+def test_template_has_hash_tab_state():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # marker for the URL-hash tab-state feature (SPEC #7): a named helper
+    # that replaces (never pushes) the current history entry.
+    assert "setTabHash" in text
+    assert "replaceState" in text
+    assert "validHashTab" in text
+
+
+# ---------------------------------------------------------------------------
+# DATA-VIS: metrics-tab filter bar / inline bars / sticky header / file
+# detail panel, and impact-tab combobox / jump-to-line / syntax highlighting
+# / result filters+export (see report_template.html for implementation).
+# ---------------------------------------------------------------------------
+def test_template_has_metrics_filter_bar():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="metrics-filter-text"' in text
+    assert 'id="metrics-lang-pills"' in text
+    assert 'id="metrics-threshold-col"' in text
+    assert 'id="metrics-threshold-cmp"' in text
+    assert 'id="metrics-threshold-val"' in text
+    assert 'id="metrics-filter-clear-btn"' in text
+    assert 'id="metrics-filter-count"' in text
+    assert "件を表示" in text
+    assert "フィルタをクリア" in text
+    assert "applyMetricsFilters" in text
+
+
+def test_template_has_metrics_inline_bars():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "metric-bar" in text
+    assert "metric-cell" in text
+    assert "bar-loc" in text
+    assert "bar-cc" in text
+    assert "aria-hidden=" in text  # bars are aria-hidden; numbers remain the accessible content
+
+
+def test_template_has_sticky_metrics_header():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "STICKY_TABLE_HEADER" in text
+    assert "metrics-table-scroll" in text
+    assert "position:sticky" in text
+
+
+def test_template_has_metrics_detail_panel():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="metrics-detail-panel"' in text
+    assert 'id="metrics-detail-body"' in text
+    assert 'id="metrics-detail-close-btn"' in text
+    assert "openMetricsDetail" in text
+    assert "closeMetricsDetail" in text
+    assert "依存グラフで表示" in text
+    assert "影響範囲で開く" in text
+    assert "閉じる" in text
+    assert "focusGraphNodeById" in text
+
+
+def test_template_has_impact_combobox():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="impact-file-combo"' in text
+    assert 'role="combobox"' in text
+    assert 'aria-expanded="false"' in text
+    assert 'aria-controls="impact-file-listbox"' in text
+    assert 'id="impact-file-listbox"' in text
+    assert 'role="listbox"' in text
+    assert "impactPreselectFile" in text
+
+
+def test_template_has_jump_to_line():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert 'id="impact-jump-line"' in text
+    assert 'id="impact-jump-btn"' in text
+    assert "移動" in text
+    assert "scrollAndFocusLine" in text
+    assert "wireJumpToLine" in text
+
+
+def test_template_has_syntax_tokenizer():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "function tokenizeLine(" in text
+    assert "tok-comment" in text
+    assert "tok-string" in text
+    assert "tok-keyword" in text
+    assert "tok-number" in text
+    assert "getTokenizedLines" in text
+
+
+def test_template_has_impact_result_filters_and_export():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "結果をCSVダウンロード" in text
+    assert "結果をJSONダウンロード" in text
+    assert "すべて" in text
+    assert "確実のみ" in text
+    assert "推定を含む" in text
+    assert "呼び出し" in text
+    assert "インポート" in text
+    assert "データフロー" in text
+    assert "buildImpactCsv" in text
+    assert "affected-file-details" in text
+    # A11y (axe nested-interactive): the show-source action is a standalone
+    # button INSIDE the details body labeled ソースを表示; the <summary>
+    # itself must contain no nested interactive element (no <button> inside).
+    assert "ソースを表示" in text
+    assert "<summary><strong>" in text
+    assert "'<summary>' + nameHtml" not in text
+
+
+def test_template_has_no_em_or_en_dash():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    assert "—" not in text  # em dash
+    assert "–" not in text  # en dash
+
+
+def test_build_html_metrics_and_impact_features_survive_real_build(tmp_path, sample_result_with_sources):
+    """End-to-end smoke test: a real build_html() output still contains all
+    the new markers above, i.e. nothing in html_builder.py strips/escapes
+    them away."""
+    out_path = tmp_path / "report.html"
+    build_html(sample_result_with_sources, out_path)
+    html = out_path.read_text(encoding="utf-8")
+    assert 'id="metrics-filter-bar"' in html
+    assert 'id="metrics-detail-panel"' in html
+    assert 'id="impact-file-combo"' in html
+    assert "function tokenizeLine(" in html
+    assert "結果をCSVダウンロード" in html

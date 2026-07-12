@@ -132,6 +132,11 @@ h2 .disclosure-btn:focus-visible{outline:2px solid var(--focus); outline-offset:
 
 /* ==== Run / progress ==== */
 #run-row{display:flex; align-items:center; gap:14px; margin-top:6px; flex-wrap:wrap;}
+#run-shortcut-hint{
+  font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:12.5px; color:var(--text-muted); background:var(--grey-bg);
+  border:1px solid var(--border-soft); border-radius:6px; padding:4px 8px;
+}
 #run-status-text{font-size:13.5px; color:var(--text-muted); margin-top:10px; min-height:1.4em;}
 .progress-indeterminate{
   position:relative; height:6px; width:220px; max-width:100%;
@@ -171,8 +176,22 @@ h2 .disclosure-btn:focus-visible{outline:2px solid var(--focus); outline-offset:
   background:var(--red-bg); color:var(--red); padding:10px 14px; border-radius:6px;
   margin-top:10px; font-size:13.5px; border:1px solid var(--red-border);
 }
+.error-detail{margin-top:8px;}
+.error-detail summary{
+  cursor:pointer; font-weight:600; color:var(--red); min-height:24px;
+}
+.error-detail summary:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
+.error-detail-pre{
+  font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:12.5px; line-height:1.5; color:var(--text); background:#fff;
+  border:1px solid var(--red-border); border-radius:6px; padding:10px;
+  margin:8px 0; max-height:260px; overflow:auto; white-space:pre-wrap;
+  word-break:break-all; -webkit-user-select:all; user-select:all;
+}
+.error-detail-pre:focus-visible{outline:2px solid var(--focus); outline-offset:1px;}
 
 /* ==== Recent list ==== */
+#recent-filter-row{margin-bottom:12px;}
 #recent-list{list-style:none; margin:0; padding:0;}
 #recent-list li{
   border-bottom:1px solid var(--border-soft); padding:10px 2px; min-height:40px;
@@ -224,7 +243,8 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     <div class="field-row" style="margin-top:12px;">
       <label class="field" for="path-input">プロジェクトパスを直接入力</label>
       <div class="path-sync-row">
-        <input type="text" id="path-input" placeholder="パスを直接入力…" aria-describedby="browse-error">
+        <input type="text" id="path-input" placeholder="パスを直接入力…" aria-describedby="browse-error" list="path-datalist" autocomplete="off">
+        <datalist id="path-datalist"></datalist>
         <button id="path-sync-btn" class="btn" type="button">同期</button>
       </div>
       <div id="browse-error" class="browse-error hidden" role="alert"></div>
@@ -273,7 +293,11 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
   <section class="panel" aria-labelledby="heading-run">
     <h2 id="heading-run">解析の実行</h2>
     <div id="run-row">
-      <button id="run-btn" class="btn btn-primary btn-big" type="button">解析を実行</button>
+      <button id="run-btn" class="btn btn-primary btn-big" type="button" title="解析を実行（Cmd+Enter / Ctrl+Enterでも実行できます）">解析を実行</button>
+      <span id="run-shortcut-hint">
+        <span aria-hidden="true">&#8984;&#9166;</span>
+        <span class="visually-hidden">Cmd+Enterでも実行できます</span>
+      </span>
     </div>
     <div id="run-status-text" aria-live="polite" aria-atomic="true"></div>
     <div id="progress-area" class="hidden">
@@ -307,6 +331,10 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       <button id="compare-btn" class="btn btn-primary btn-sm" type="button" aria-disabled="true" title="比較するには解析結果を2件選択してください">選択した2件を比較</button>
       <span id="compare-hint"></span>
     </div>
+    <div id="recent-filter-row" class="field-row hidden">
+      <label class="field" for="recent-filter">パスで絞り込み</label>
+      <input type="text" id="recent-filter" placeholder="パスの一部を入力…">
+    </div>
     <ul id="recent-list"></ul>
     <div id="recent-empty" class="hidden">まだ解析履歴はありません．</div>
     <div id="compare-error" class="error-box hidden" role="alert"></div>
@@ -325,6 +353,8 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     jobId: null,
     compareSelection: [],   // entry TIMESTAMPS, in the order the user ticked them
     anyComparable: false,
+    allRecentEntries: [],   // unfiltered, most-recent-first (from /api/recent)
+    optionsPrefilled: false, // last_options applied only once, on initial load
   };
 
   // ---- small DOM helpers ----
@@ -478,6 +508,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     $("opt-no-embed").checked = options.embed_sources === false;
     $("opt-max-nodes").value = options.max_nodes || 800;
     $("opt-churn-window").value = (options.churn_window != null) ? options.churn_window : 365;
+    if (options.out_dir != null){ $("opt-out-dir").value = options.out_dir; }
   }
 
   function runAnalyze(){
@@ -536,7 +567,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
           clearInterval(state.pollTimer);
           $("run-btn").disabled = false;
           if (data.error){
-            showError(data.error);
+            showError(data.error, data.error_detail);
           } else {
             showResult(data);
           }
@@ -564,11 +595,72 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     setRunStatusText("解析が完了しました．ファイル数: " + (s.files != null ? s.files : "-"));
   }
 
-  function showError(message){
+  // ---- clipboard (used by the error-detail コピー button) ----
+  function fallbackCopyText(text){
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.left = "-1000px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e){ ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  function copyTextToClipboard(text, onDone){
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(
+        function(){ onDone(true); },
+        function(){ onDone(fallbackCopyText(text)); }
+      );
+    } else {
+      onDone(fallbackCopyText(text));
+    }
+  }
+
+  function buildErrorDetail(detail){
+    var details = document.createElement("details");
+    details.className = "error-detail";
+    var summary = document.createElement("summary");
+    summary.textContent = "詳細";
+    details.appendChild(summary);
+
+    var pre = document.createElement("pre");
+    pre.className = "error-detail-pre";
+    pre.textContent = detail;
+    pre.setAttribute("tabindex", "0");
+    details.appendChild(pre);
+
+    var copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn btn-sm";
+    copyBtn.textContent = "コピー";
+    copyBtn.addEventListener("click", function(){
+      var originalLabel = "コピー";
+      copyTextToClipboard(detail, function(ok){
+        copyBtn.textContent = ok ? "コピーしました" : "コピーできませんでした";
+        setTimeout(function(){ copyBtn.textContent = originalLabel; }, 1500);
+      });
+    });
+    details.appendChild(copyBtn);
+    return details;
+  }
+
+  function showError(message, detail){
     $("run-btn").disabled = false;
     hide($("progress-area"));
     var el = $("error-area");
-    el.textContent = "エラー: " + message;
+    el.innerHTML = "";
+    var msgDiv = document.createElement("div");
+    msgDiv.textContent = "エラー: " + message;
+    el.appendChild(msgDiv);
+    if (detail){
+      el.appendChild(buildErrorDetail(detail));
+    }
     show(el);
     setRunStatusText("エラー: " + message);
   }
@@ -579,6 +671,17 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       return;
     }
     runAnalyze();
+  });
+
+  // ---- keyboard shortcut: Cmd+Enter (mac) / Ctrl+Enter (anywhere on the
+  // page) triggers 解析を実行, but only when a run is not already in
+  // progress (mirrors the run-btn's own disabled state).
+  document.addEventListener("keydown", function(e){
+    if (e.key !== "Enter"){ return; }
+    if (!(e.metaKey || e.ctrlKey)){ return; }
+    if ($("run-btn").disabled){ return; }
+    e.preventDefault();
+    $("run-btn").click();
   });
 
   // ---- recent analyses ----
@@ -593,13 +696,64 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     }
   }
 
+  // Coarse "N分前" / "N日前" style relative time, computed client-side so
+  // it always reflects the viewer's current clock (the absolute timestamp
+  // is kept as a title= tooltip alongside it, see renderRecent()).
+  function relativeTime(ts){
+    if (!ts){ return ""; }
+    var d = new Date(ts);
+    if (isNaN(d.getTime())){ return ""; }
+    var diffSec = Math.round((Date.now() - d.getTime()) / 1000);
+    if (diffSec < 0){ diffSec = 0; }
+    if (diffSec < 60){ return "たった今"; }
+    var diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60){ return diffMin + "分前"; }
+    var diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24){ return diffHour + "時間前"; }
+    var diffDay = Math.floor(diffHour / 24);
+    if (diffDay < 30){ return diffDay + "日前"; }
+    var diffMonth = Math.floor(diffDay / 30);
+    if (diffMonth < 12){ return diffMonth + "ヶ月前"; }
+    return Math.floor(diffDay / 365) + "年前";
+  }
+
   function loadRecent(){
     fetchJSON("/api/recent").then(function(r){
-      renderRecent(r.data || []);
+      var data = r.data || {};
+      renderRecent(data.entries || []);
+      // last_options prefills the 詳細オプション form on the INITIAL load
+      // only -- reapplying it after every later loadRecent() (which also
+      // fires when a job finishes) would clobber options the user is
+      // already editing for their next run.
+      if (!state.optionsPrefilled){
+        state.optionsPrefilled = true;
+        if (data.last_options){ applyOptionsToForm(data.last_options); }
+      }
     });
   }
 
+  function updatePathDatalist(entries){
+    var dl = $("path-datalist");
+    dl.innerHTML = "";
+    var seen = {};
+    entries.forEach(function(entry){
+      var p = entry.path;
+      if (!p || seen[p]){ return; }
+      seen[p] = true;
+      var opt = document.createElement("option");
+      opt.value = p;
+      dl.appendChild(opt);
+    });
+  }
+
+  function currentRecentFilterText(){
+    return $("recent-filter").value.trim().toLowerCase();
+  }
+
   function renderRecent(entries){
+    state.allRecentEntries = entries;
+    updatePathDatalist(entries);
+
     // Selection is keyed by entry TIMESTAMP (not out_dir): two runs of the
     // SAME project share the default out_dir, so out_dir cannot tell them
     // apart -- the timestamp can (the server's /api/compare uses the same
@@ -609,16 +763,37 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     entries.forEach(function(e){ if (e.timestamp){ stillPresent[e.timestamp] = true; } });
     state.compareSelection = state.compareSelection.filter(function(t){ return stillPresent[t]; });
 
+    // Filter box (only shown once there is enough history to make filtering
+    // worthwhile): filters by path substring, case-insensitive.
+    var filterRow = $("recent-filter-row");
+    if (entries.length > 3){
+      show(filterRow);
+    } else {
+      hide(filterRow);
+      $("recent-filter").value = "";
+    }
+    var filterText = currentRecentFilterText();
+    var visible = filterText
+      ? entries.filter(function(e){ return (e.path || "").toLowerCase().indexOf(filterText) !== -1; })
+      : entries;
+
     var list = $("recent-list");
     list.innerHTML = "";
     state.anyComparable = false;
     if (!entries.length){
+      $("recent-empty").textContent = "まだ解析履歴はありません．";
+      show($("recent-empty"));
+      updateCompareToolbar();
+      return;
+    }
+    if (!visible.length){
+      $("recent-empty").textContent = "条件に一致する解析履歴はありません．";
       show($("recent-empty"));
       updateCompareToolbar();
       return;
     }
     hide($("recent-empty"));
-    entries.forEach(function(entry){
+    visible.forEach(function(entry){
       var li = document.createElement("li");
 
       var main = document.createElement("div");
@@ -626,15 +801,20 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       var pathDiv = document.createElement("div");
       pathDiv.className = "recent-path";
       pathDiv.textContent = entry.path || "";
+      // full path tooltip (useful once CSS truncates a long path visually)
+      pathDiv.title = entry.path || "";
       var metaDiv = document.createElement("div");
       metaDiv.className = "recent-meta";
       var files = (entry.summary && entry.summary.files != null) ? entry.summary.files : "-";
       var tsLabel = fmtTimestamp(entry.timestamp);
+      var tsRelative = relativeTime(entry.timestamp);
       // 日時 rendered prominently (own styled span) so two runs of the
-      // same path are easy to tell apart in the list.
+      // same path are easy to tell apart in the list. Relative time is the
+      // visible text; the absolute timestamp is kept as a title= tooltip.
       var tsSpan = document.createElement("span");
       tsSpan.className = "recent-ts";
-      tsSpan.textContent = "日時: " + tsLabel;
+      tsSpan.textContent = "日時: " + (tsRelative || tsLabel);
+      if (tsLabel){ tsSpan.title = tsLabel; }
       metaDiv.appendChild(tsSpan);
       metaDiv.appendChild(document.createTextNode("・ファイル数: " + files));
       main.appendChild(pathDiv);
@@ -700,6 +880,10 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
     });
     updateCompareToolbar();
   }
+
+  $("recent-filter").addEventListener("input", function(){
+    renderRecent(state.allRecentEntries);
+  });
 
   // ---- compare two recent analyses ----
   function updateCompareToolbar(){

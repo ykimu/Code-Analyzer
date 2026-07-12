@@ -32,6 +32,7 @@ import json
 import os
 import shutil
 import threading
+import traceback
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -60,6 +61,12 @@ _REPORT_FILE_WHITELIST = ("report.html", "compare.html")
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "template"
 _MAX_RECENT = 10
+
+#: Guards read-modify-write cycles against the persisted state file (recent
+#: entries + last_options): several code paths (a job's own completion, a
+#: concurrent job's completion, and /api/analyze's last_options write at job
+#: START) can all touch the same file from different threads.
+_STATE_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -110,47 +117,81 @@ def _snapshot_analysis(job_id: str, out_dir: Path) -> Optional[str]:
         return None
 
 
-def _load_recent() -> list[dict[str, Any]]:
-    """Load the persisted recent-analyses list; tolerate a missing/corrupt file."""
+def _load_state() -> dict[str, Any]:
+    """Load the persisted GUI state: ``{"entries": [...], "last_options":
+    {...} | None}``. Tolerates a missing file, a corrupt file, AND the
+    pre-v1.5 format (a bare JSON list of entries, no ``last_options`` yet)."""
     path = _recent_path()
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
-        return []
+        return {"entries": [], "last_options": None}
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return []
-    if not isinstance(data, list):
-        return []
-    return [e for e in data if isinstance(e, dict)]
+        return {"entries": [], "last_options": None}
+    if isinstance(data, list):  # pre-v1.5 bare-list format
+        return {"entries": [e for e in data if isinstance(e, dict)], "last_options": None}
+    if isinstance(data, dict):
+        raw_entries = data.get("entries")
+        entries = [e for e in raw_entries if isinstance(e, dict)] if isinstance(raw_entries, list) else []
+        last_options = data.get("last_options")
+        if not isinstance(last_options, dict):
+            last_options = None
+        return {"entries": entries, "last_options": last_options}
+    return {"entries": [], "last_options": None}
 
 
-def _save_recent(entries: list[dict[str, Any]]) -> None:
+def _save_state(state: dict[str, Any]) -> None:
     path = _recent_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         pass  # best-effort persistence; a failure here must not crash the job
 
 
+def _load_recent() -> list[dict[str, Any]]:
+    """Load the persisted recent-analyses list; tolerate a missing/corrupt file."""
+    return _load_state()["entries"]
+
+
+def _load_last_options() -> Optional[dict[str, Any]]:
+    """Load the persisted 詳細オプション form values (v1.5), or ``None`` if
+    no analyze has ever been run against this state file."""
+    return _load_state()["last_options"]
+
+
+def _persist_last_options(options: dict[str, Any]) -> None:
+    """Persist the 詳細オプション form values so reopening the GUI restores
+    them (v1.5). Called at job START (not completion) -- these are the
+    values the user submitted, independent of whether the job later
+    succeeds or fails."""
+    with _STATE_LOCK:
+        state = _load_state()
+        state["last_options"] = options
+        _save_state(state)
+
+
 def _append_recent(entry: dict[str, Any]) -> None:
-    entries = _load_recent()
-    entries.append(entry)
-    kept = entries[-_MAX_RECENT:]
-    dropped = entries[:-_MAX_RECENT]
-    if dropped:
-        # prune snapshot files that no surviving recent entry references
-        referenced = {e.get("snapshot") for e in kept if e.get("snapshot")}
-        for e in dropped:
-            snap = e.get("snapshot")
-            if snap and snap not in referenced:
-                try:
-                    Path(snap).unlink()
-                except OSError:
-                    pass  # best-effort cleanup
-    _save_recent(kept)
+    with _STATE_LOCK:
+        state = _load_state()
+        entries = state["entries"]
+        entries.append(entry)
+        kept = entries[-_MAX_RECENT:]
+        dropped = entries[:-_MAX_RECENT]
+        if dropped:
+            # prune snapshot files that no surviving recent entry references
+            referenced = {e.get("snapshot") for e in kept if e.get("snapshot")}
+            for e in dropped:
+                snap = e.get("snapshot")
+                if snap and snap not in referenced:
+                    try:
+                        Path(snap).unlink()
+                    except OSError:
+                        pass  # best-effort cleanup
+        state["entries"] = kept
+        _save_state(state)
 
 
 def _recent_list_with_status() -> list[dict[str, Any]]:
@@ -254,20 +295,37 @@ def _start_analyze(state: GuiState, body: dict[str, Any]) -> tuple[int, dict[str
         "churn_window": churn_window,
     }
 
+    # v1.5: persist the 詳細オプション form values (including out_dir, which
+    # is not part of `options` above -- that dict feeds the analysis pipeline
+    # and is also stored verbatim on the recent entry) so reopening the GUI
+    # restores them. Persisted at job START -- these are the values the user
+    # submitted, independent of whether the job later succeeds or fails.
+    last_options = dict(options)
+    last_options["out_dir"] = str(out_dir_raw) if out_dir_raw else ""
+    _persist_last_options(last_options)
+
+    # Hidden test-only hook (never reachable outside the test suite): lets
+    # tests force a mid-job exception to exercise the error/error_detail
+    # status path without racing the filesystem. Gated on an env var so it
+    # can never be triggered by a real client hitting a real server.
+    test_fail = bool(body.get("__test_fail__")) and bool(os.environ.get("CODE_ANALYZER_GUI_TEST"))
+
     job_id = state.new_job(out_dir)
     thread = threading.Thread(
-        target=_run_job, args=(state, job_id, p, out_dir, options), daemon=True,
+        target=_run_job, args=(state, job_id, p, out_dir, options, test_fail), daemon=True,
     )
     thread.start()
     return 200, {"job_id": job_id}
 
 
 def _run_job(state: GuiState, job_id: str, path: Path, out_dir: Path,
-             options: dict[str, Any]) -> None:
+             options: dict[str, Any], test_fail: bool = False) -> None:
     """Background job body -- mirrors ``cli.cmd_analyze``'s pipeline exactly."""
     job = state.jobs[job_id]
     try:
         job["phase"] = PHASE_SCAN
+        if test_fail:
+            raise RuntimeError("test failure")
         includes = [options["include"]] if options["include"] else []
         excludes = [options["exclude"]] if options["exclude"] else []
         result = analyze_project(
@@ -316,7 +374,12 @@ def _run_job(state: GuiState, job_id: str, path: Path, out_dir: Path,
             "snapshot": _snapshot_analysis(job_id, out_dir),
         })
     except Exception as e:  # noqa: BLE001 - background job error boundary
+        # v1.5: keep the last ~30 lines of the traceback for the UI's
+        # collapsible 詳細 disclosure (a full traceback can be long; the
+        # tail is what usually matters -- the raised exception itself).
+        tb_lines = traceback.format_exc().splitlines()
         job["error"] = str(e)
+        job["error_detail"] = "\n".join(tb_lines[-30:])
         job["phase"] = PHASE_ERROR
         job["done"] = True
 
@@ -330,6 +393,7 @@ def _status(state: GuiState, job_id: Optional[str]) -> tuple[int, dict[str, Any]
         "phase": job["phase"],
         "done": job["done"],
         "error": job.get("error"),
+        "error_detail": job.get("error_detail"),
         "summary": job.get("summary"),
         "report_url": report_url,
         "out_dir": job["out_dir"],
@@ -591,7 +655,13 @@ class _GuiRequestHandler(BaseHTTPRequestHandler):
                 self._send_html_bytes(200, data)
             return
         if parsed.path == "/api/recent":
-            self._send_json(200, _recent_list_with_status())
+            # v1.5: {"entries": [...], "last_options": {...} | None} -- was a
+            # bare list pre-v1.5; last_options lets the GUI restore the
+            # 詳細オプション form on reopen (see _persist_last_options).
+            self._send_json(200, {
+                "entries": _recent_list_with_status(),
+                "last_options": _load_last_options(),
+            })
             return
         if parsed.path == "/api/report-file":
             out_dir_str = qs.get("path", [None])[0]

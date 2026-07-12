@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import threading
 import time
 import urllib.error
@@ -213,13 +214,21 @@ def test_analyze_end_to_end_and_recent(gui, tmp_path):
 
     status, body = _get(gui, "/api/recent")
     assert status == 200
-    recent = json.loads(body)
+    payload = json.loads(body)
+    recent = payload["entries"]
     assert len(recent) >= 2
     # most-recent-first
     assert recent[0]["out_dir"] == str(out_dir2)
     assert recent[0]["path"] == str(SAMPLE.resolve())
     assert recent[0]["report_exists"] is True
     assert recent[0]["summary"]["files"] == 16
+    # v1.5: last_options reflects the most recently SUBMITTED analyze (job2
+    # used no custom 詳細オプション, so this is the all-defaults shape).
+    assert payload["last_options"] == {
+        "include": "", "exclude": "", "no_gitignore": False,
+        "embed_sources": True, "max_nodes": 800, "churn_window": 365,
+        "out_dir": str(out_dir2),
+    }
 
 
 def test_analyze_report_404_before_done(gui, tmp_path):
@@ -288,6 +297,92 @@ def test_analyze_churn_window_zero_skips_churn(gui, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# error_detail (v1.5): /api/status carries a traceback tail on a failed job
+# ---------------------------------------------------------------------------
+def test_status_error_detail_on_failed_job(gui, monkeypatch, tmp_path):
+    # Hidden test-only hook (see server._start_analyze): a real mid-job
+    # exception is otherwise hard to force deterministically without a racy
+    # filesystem setup, so the server exposes a gated escape hatch instead.
+    monkeypatch.setenv("CODE_ANALYZER_GUI_TEST", "1")
+    out_dir = tmp_path / "out_fail"
+    status, body = _post(gui, "/api/analyze",
+                          {"path": str(SAMPLE), "out_dir": str(out_dir), "__test_fail__": True})
+    assert status == 200
+    job_id = json.loads(body)["job_id"]
+
+    data = _poll_until_done(gui, job_id)
+    assert data["error"] == "test failure"
+    assert data["error_detail"]
+    assert "test failure" in data["error_detail"]
+    assert "RuntimeError" in data["error_detail"]
+
+
+def test_test_fail_hook_inert_without_env_var(gui, tmp_path):
+    # Without CODE_ANALYZER_GUI_TEST set, __test_fail__ must be a no-op --
+    # the job runs normally (this guards against the hook ever being
+    # reachable from a real client hitting a real server).
+    out_dir = tmp_path / "out_not_fail"
+    status, body = _post(gui, "/api/analyze",
+                          {"path": str(SAMPLE), "out_dir": str(out_dir), "__test_fail__": True})
+    assert status == 200
+    data = _poll_until_done(gui, json.loads(body)["job_id"])
+    assert data["error"] is None
+    assert data["error_detail"] is None
+
+
+# ---------------------------------------------------------------------------
+# last_options round-trip (v1.5): 詳細オプション form values persist across
+# GUI reopens, keyed off the persisted state file (never localStorage).
+# ---------------------------------------------------------------------------
+def test_last_options_round_trip(gui, tmp_path):
+    out_dir = tmp_path / "custom_out"
+    body = {
+        "path": str(SAMPLE),
+        "out_dir": str(out_dir),
+        "include": "src/**/*.py",
+        "exclude": "**/vendor/**",
+        "no_gitignore": True,
+        "embed_sources": False,
+        "max_nodes": 250,
+        "churn_window": 30,
+    }
+    status, resp = _post(gui, "/api/analyze", body)
+    assert status == 200
+    _poll_until_done(gui, json.loads(resp)["job_id"])
+
+    status, resp = _get(gui, "/api/recent")
+    assert status == 200
+    last_options = json.loads(resp)["last_options"]
+    assert last_options == {
+        "include": "src/**/*.py",
+        "exclude": "**/vendor/**",
+        "no_gitignore": True,
+        "embed_sources": False,
+        "max_nodes": 250,
+        "churn_window": 30,
+        "out_dir": str(out_dir),
+    }
+
+
+def test_last_options_persisted_even_when_job_fails(gui, monkeypatch, tmp_path):
+    # last_options reflects what the user SUBMITTED, independent of whether
+    # the job later succeeds -- persisted at job start, not job completion.
+    monkeypatch.setenv("CODE_ANALYZER_GUI_TEST", "1")
+    out_dir = tmp_path / "out_fail_opts"
+    status, resp = _post(gui, "/api/analyze", {
+        "path": str(SAMPLE), "out_dir": str(out_dir),
+        "max_nodes": 42, "__test_fail__": True,
+    })
+    assert status == 200
+    _poll_until_done(gui, json.loads(resp)["job_id"])
+
+    status, resp = _get(gui, "/api/recent")
+    last_options = json.loads(resp)["last_options"]
+    assert last_options["max_nodes"] == 42
+    assert last_options["out_dir"] == str(out_dir)
+
+
+# ---------------------------------------------------------------------------
 # POST /api/compare (v1.3: snapshot-based temporal compare)
 #
 # Entries are identified by their `timestamp` field (a_ts/b_ts). Documented
@@ -309,7 +404,7 @@ def _run_job_and_wait(gui, path, out_dir) -> dict:
 def _recent_entries(gui) -> list:
     status, body = _get(gui, "/api/recent")
     assert status == 200
-    return json.loads(body)
+    return json.loads(body)["entries"]
 
 
 def test_compare_temporal_happy_path(gui, tmp_path):
@@ -491,6 +586,81 @@ def test_gui_html_reads_path_input_at_submit_time():
 
 
 # ---------------------------------------------------------------------------
+# gui.html static contract (v1.5 GUI-UX pass): path autocomplete, Cmd+Enter
+# shortcut, relative-time helper, and valid inline JS.
+# ---------------------------------------------------------------------------
+def _gui_html_text() -> str:
+    template = Path(gui_server_mod.__file__).parent / "template" / "gui.html"
+    return template.read_text(encoding="utf-8")
+
+
+def test_index_page_has_path_datalist(gui):
+    """#path-input must be wired to a <datalist> for path autocomplete
+    (populated client-side from the recent-analyses list)."""
+    status, body = _get(gui, "/")
+    assert status == 200
+    text = body.decode("utf-8")
+    assert 'list="path-datalist"' in text
+    assert '<datalist id="path-datalist">' in text
+
+
+def test_gui_html_has_cmd_ctrl_enter_shortcut():
+    """Cmd+Enter (mac) / Ctrl+Enter anywhere on the page must trigger
+    解析を実行 -- a global keydown listener gated on metaKey/ctrlKey + Enter,
+    and only when the run button is not already disabled (job in progress)."""
+    text = _gui_html_text()
+    assert 'e.metaKey || e.ctrlKey' in text
+    assert "$(\"run-btn\").disabled" in text
+    assert '$("run-btn").click()' in text
+    # the button surfaces the shortcut to sighted and screen-reader users
+    assert "Cmd+Enter" in text
+    assert "Cmd+Enterでも実行できます" in text
+
+
+def test_gui_html_has_relative_time_function():
+    text = _gui_html_text()
+    assert "function relativeTime(" in text
+    assert "分前" in text and "日前" in text
+
+
+def test_gui_html_has_error_detail_disclosure():
+    text = _gui_html_text()
+    assert "<details" not in text  # built dynamically, not hardcoded markup
+    assert 'details.className = "error-detail"' in text
+    assert 'summary.textContent = "詳細"' in text
+    assert "error-detail-pre" in text
+    assert "navigator.clipboard" in text
+
+
+def test_gui_html_has_recent_filter_box():
+    text = _gui_html_text()
+    assert 'id="recent-filter"' in text
+    assert 'id="recent-filter-row"' in text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_gui_html_inline_script_is_valid_js(tmp_path):
+    text = _gui_html_text()
+    m = re.search(r"<script>(.*?)</script>", text, re.S)
+    assert m is not None, "gui.html must have exactly one inline <script> block"
+    js_path = tmp_path / "gui_inline.js"
+    js_path.write_text(m.group(1), encoding="utf-8")
+    result = subprocess.run(
+        ["node", "--check", str(js_path)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"node --check failed:\n{result.stderr}"
+
+
+def test_gui_html_has_no_typographic_dashes():
+    # style/lint constraint for this GUI-UX pass: no em dash / en dash
+    # characters anywhere in the template (plain ASCII hyphens only).
+    text = _gui_html_text()
+    assert "—" not in text  # em dash (—)
+    assert "–" not in text  # en dash (–)
+
+
+# ---------------------------------------------------------------------------
 # recent-file corruption tolerance
 # ---------------------------------------------------------------------------
 def test_recent_corrupt_file_tolerated(gui, monkeypatch, tmp_path):
@@ -500,11 +670,15 @@ def test_recent_corrupt_file_tolerated(gui, monkeypatch, tmp_path):
 
     status, body = _get(gui, "/api/recent")
     assert status == 200
-    assert json.loads(body) == []
+    payload = json.loads(body)
+    assert payload["entries"] == []
+    assert payload["last_options"] is None
 
 
 def test_recent_missing_file_returns_empty_list(gui, tmp_path, monkeypatch):
     monkeypatch.setenv("CODE_ANALYZER_GUI_STATE", str(tmp_path / "does-not-exist.json"))
     status, body = _get(gui, "/api/recent")
     assert status == 200
-    assert json.loads(body) == []
+    payload = json.loads(body)
+    assert payload["entries"] == []
+    assert payload["last_options"] is None

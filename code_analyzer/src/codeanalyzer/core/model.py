@@ -75,7 +75,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 SCHEMA_VERSION = "1.2"
-TOOL_VERSION = "1.4.0"
+TOOL_VERSION = "1.5.0"
 
 
 class Language(str, enum.Enum):
