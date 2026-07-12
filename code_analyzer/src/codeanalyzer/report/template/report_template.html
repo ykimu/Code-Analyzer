@@ -96,6 +96,16 @@ main{padding:18px 20px 60px 20px;}
 .sortable-th{cursor:pointer; user-select:none;}
 .sortable-th:hover{color:var(--accent-dark);}
 #files-metrics-table{min-width:1180px;}
+.data-table tr.row-highlight{background:var(--amber-bg) !important;}
+
+/* ==== Hotspot scatter ==== */
+.hotspot-scatter-wrap{position:relative;}
+.hotspot-tooltip{
+  position:absolute; pointer-events:none; background:var(--text); color:#fff;
+  padding:5px 8px; border-radius:5px; font-size:11.5px; line-height:1.4; z-index:5; max-width:280px;
+}
+.hotspot-point{cursor:pointer; stroke:#fff; stroke-width:0.75px;}
+.hotspot-point:hover{stroke:var(--text); stroke-width:1.5px;}
 
 /* ==== Badges ==== */
 .badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600;}
@@ -256,6 +266,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
         <div class="toolbar">
           <label><input type="radio" name="treemap-color" value="cc" checked> CC最大で色分け</label>
           <label><input type="radio" name="treemap-color" value="mi"> MIで色分け</label>
+          <label id="treemap-hotspot-option" class="hidden"><input type="radio" name="treemap-color" value="hotspot"> ホットスポットで色分け</label>
         </div>
         <svg id="treemap-svg"></svg>
         <div id="treemap-legend" class="legend-gradient"></div>
@@ -268,6 +279,17 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
     <div class="panel hidden" id="network-stats-panel">
       <h2>ネットワーク統計</h2>
       <div class="cards" id="network-stats-cards"></div>
+    </div>
+    <div class="panel hidden" id="hotspot-panel">
+      <h2>ホットスポット（複雑度 × 変更頻度）</h2>
+      <p class="muted">円の大きさ = 実効LOC，色 = ホットスポットスコア（0〜1）。点をクリックすると下のファイル別メトリクス表内の該当行がハイライトされます。</p>
+      <div class="hotspot-scatter-wrap">
+        <svg id="hotspot-scatter-svg"></svg>
+        <div id="hotspot-tooltip" class="hotspot-tooltip hidden"></div>
+      </div>
+      <div class="legend-gradient" id="hotspot-scatter-legend"></div>
+      <h3>ホットスポット上位20件</h3>
+      <div class="table-scroll"><table id="hotspot-table" class="data-table"></table></div>
     </div>
     <div class="panel">
       <h2>ファイル別メトリクス（列見出しクリックでソート）</h2>
@@ -962,6 +984,7 @@ function mapTreeNode(n) {
 function renderHierarchyTab() {
   var treeData = buildFileTree();
   renderTreeList(treeData);
+  byId('treemap-hotspot-option').classList.toggle('hidden', !hotspotsAvailable());
   wireTreemapControls();
   renderTreemap(buildFileTree(), 'cc');
 }
@@ -1060,8 +1083,10 @@ function renderTreemap(treeData, mode) {
       }, 50);
     });
   rect.append('title').text(function (d) {
-    return d.data.path + '\n' + (mode === 'cc' ? 'CC最大: ' + fmt(getMetric(d.data.fileId, 'cc_max', null))
-                                                 : 'MI: ' + fmt(getMetric(d.data.fileId, 'mi', null)));
+    var label = mode === 'mi' ? 'MI: ' + fmt(getMetric(d.data.fileId, 'mi', null))
+      : mode === 'hotspot' ? 'ホットスポット: ' + fmtHotspot(getMetric(d.data.fileId, 'hotspot', null))
+      : 'CC最大: ' + fmt(getMetric(d.data.fileId, 'cc_max', null));
+    return d.data.path + '\n' + label;
   });
   leaf.append('text')
     .attr('x', 3).attr('y', 12)
@@ -1081,6 +1106,13 @@ function buildTreemapColorFn(mode) {
       return d3.interpolateRdYlGn(Math.max(0, Math.min(1, v / 100)));
     };
   }
+  if (mode === 'hotspot') {
+    return function (fid) {
+      var v = getMetric(fid, 'hotspot', null);
+      if (v === null) return '#cccccc';
+      return d3.interpolateViridis(Math.max(0, Math.min(1, v)));
+    };
+  }
   var maxCC = d3.max(DATA.files, function (f) { return getMetric(f.id, 'cc_max', 0); }) || 1;
   return function (fid) {
     var v = getMetric(fid, 'cc_max', null);
@@ -1094,6 +1126,10 @@ function renderTreemapLegend(mode) {
   if (mode === 'mi') {
     el.innerHTML = '<span>MI低（悪い）</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
       d3.interpolateRdYlGn(0) + ',' + d3.interpolateRdYlGn(0.5) + ',' + d3.interpolateRdYlGn(1) + ')"></div><span>MI高（良い）</span>';
+  } else if (mode === 'hotspot') {
+    el.innerHTML = '<span>ホットスポット低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
+      d3.interpolateViridis(0) + ',' + d3.interpolateViridis(0.5) + ',' + d3.interpolateViridis(1) + ')"></div><span>ホットスポット高</span>' +
+      '<span class="muted">（灰色 = データなし）</span>';
   } else {
     el.innerHTML = '<span>CC低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
       d3.interpolateOrRd(0) + ',' + d3.interpolateOrRd(1) + ')"></div><span>CC高</span>';
@@ -1118,9 +1154,23 @@ var FILE_METRIC_COLUMNS = [
   { key: 'pagerank', label: 'PageRank' },
   { key: 'betweenness', label: '媒介中心性' },
   { key: 'closeness', label: '近接中心性' },
-  { key: 'degree_centrality', label: '次数中心性' }
+  { key: 'degree_centrality', label: '次数中心性' },
+  { key: 'churn_commits', label: '変更回数' },
+  { key: 'hotspot', label: 'ホットスポット' }
 ];
 var filesMetricsSort = { key: 'path', dir: 1 };
+
+// 4dp formatter for the hotspot score (fmt() only keeps 2dp, which would
+// hide the score's actual resolution -- see core/model.py's "hotspot"
+// contract: "float 0-1, 4dp").
+function fmtHotspot(v) {
+  if (v === undefined || v === null || typeof v !== 'number' || !isFinite(v)) return '—';
+  return v.toFixed(4);
+}
+
+function hotspotsAvailable() {
+  return !!(DATA.metrics && DATA.metrics.hotspots && DATA.metrics.hotspots.length > 0);
+}
 
 function buildFilesMetricsRows() {
   var fm = fileMetricsMap();
@@ -1131,7 +1181,8 @@ function buildFilesMetricsRows() {
       loc_code: m.loc_code, loc_comment: m.loc_comment, functions: m.functions, classes: m.classes,
       cc_total: m.cc_total, cc_max: m.cc_max, mi: m.mi, fan_in: m.fan_in, fan_out: m.fan_out,
       pagerank: m.pagerank, betweenness: m.betweenness, closeness: m.closeness,
-      degree_centrality: m.degree_centrality
+      degree_centrality: m.degree_centrality,
+      churn_commits: m.churn_commits, hotspot: m.hotspot
     };
   });
 }
@@ -1154,6 +1205,7 @@ function sortRows(rows, sortSpec) {
 
 function renderMetricsTab() {
   renderNetworkStatsCard();
+  renderHotspotSection();
   renderFilesMetricsTable();
   renderWorstCcTable();
   renderMiHistogram();
@@ -1180,11 +1232,105 @@ function renderNetworkStatsCard() {
   }).join('');
 }
 
+/* ---- ホットスポット (scatter + top-20 table), v1.3 ---- */
+function renderHotspotSection() {
+  var panel = byId('hotspot-panel');
+  if (!hotspotsAvailable()) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  renderHotspotScatter();
+  renderHotspotTable();
+}
+
+function renderHotspotScatter() {
+  var svg = d3.select('#hotspot-scatter-svg');
+  svg.selectAll('*').remove();
+  var wrap = document.querySelector('.hotspot-scatter-wrap');
+  var width = Math.max(360, ((wrap && wrap.clientWidth) || 640));
+  var height = 360;
+  var margin = { top: 14, right: 20, bottom: 46, left: 56 };
+  svg.attr('width', width).attr('height', height);
+
+  var fm = fileMetricsMap();
+  var points = DATA.files.map(function (f) {
+    var m = fm[f.id] || {};
+    return {
+      id: f.id, path: f.path,
+      cc_total: m.cc_total || 0, churn_commits: m.churn_commits || 0,
+      loc_code: m.loc_code || 0, hotspot: (m.hotspot === undefined || m.hotspot === null) ? 0 : m.hotspot
+    };
+  }).filter(function (p) { return p.cc_total > 0 || p.churn_commits > 0; });
+
+  if (!points.length) {
+    svg.append('text').attr('x', width / 2).attr('y', height / 2).attr('text-anchor', 'middle').text('データがありません');
+    return;
+  }
+
+  var maxCc = d3.max(points, function (p) { return p.cc_total; }) || 1;
+  var maxChurn = d3.max(points, function (p) { return p.churn_commits; }) || 1;
+  var maxLoc = d3.max(points, function (p) { return p.loc_code; }) || 1;
+
+  var x = d3.scaleLinear().domain([0, maxCc]).nice().range([margin.left, width - margin.right]);
+  var y = d3.scaleLinear().domain([0, maxChurn]).nice().range([height - margin.bottom, margin.top]);
+  var r = d3.scaleSqrt().domain([0, maxLoc]).range([3, 22]);
+  var color = d3.scaleSequential(d3.interpolateViridis).domain([0, 1]);
+
+  var g = svg.append('g');
+  g.append('g').attr('transform', 'translate(0,' + (height - margin.bottom) + ')').call(d3.axisBottom(x).ticks(6));
+  g.append('g').attr('transform', 'translate(' + margin.left + ',0)').call(d3.axisLeft(y).ticks(6));
+
+  svg.append('text').attr('x', (margin.left + width - margin.right) / 2).attr('y', height - 6)
+    .attr('text-anchor', 'middle').attr('font-size', 11).attr('fill', 'var(--text-muted)')
+    .text('複雑度(CC合計)');
+  svg.append('text').attr('transform', 'rotate(-90)').attr('x', -(margin.top + height - margin.bottom) / 2)
+    .attr('y', 14).attr('text-anchor', 'middle').attr('font-size', 11).attr('fill', 'var(--text-muted)')
+    .text('変更回数');
+
+  var tooltip = byId('hotspot-tooltip');
+
+  g.selectAll('circle').data(points, function (p) { return p.id; }).join('circle')
+    .attr('class', 'hotspot-point')
+    .attr('cx', function (p) { return x(p.cc_total); })
+    .attr('cy', function (p) { return y(p.churn_commits); })
+    .attr('r', function (p) { return r(p.loc_code); })
+    .attr('fill', function (p) { return color(p.hotspot); })
+    .on('mousemove', function (ev, p) {
+      var rect = wrap.getBoundingClientRect();
+      tooltip.classList.remove('hidden');
+      tooltip.style.left = (ev.clientX - rect.left + 12) + 'px';
+      tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
+      tooltip.innerHTML = escapeHtml(p.path) + '<br>ホットスポット: ' + fmtHotspot(p.hotspot) +
+        '<br>CC合計: ' + fmt(p.cc_total) + ' / 変更回数: ' + fmt(p.churn_commits) + ' / LOC: ' + fmt(p.loc_code);
+    })
+    .on('mouseleave', function () { tooltip.classList.add('hidden'); })
+    .on('click', function (ev, p) { highlightMetricsRow(p.id); });
+
+  var legend = byId('hotspot-scatter-legend');
+  legend.innerHTML = '<span>ホットスポット低</span><div class="gradient-bar" style="background:linear-gradient(to right,' +
+    color(0) + ',' + color(0.5) + ',' + color(1) + ')"></div><span>ホットスポット高</span>';
+}
+
+function renderHotspotTable() {
+  var table = byId('hotspot-table');
+  var rows = (DATA.metrics.hotspots || []).slice(0, 20);
+  if (!rows.length) { table.innerHTML = '<tr><td>データがありません。</td></tr>'; return; }
+  var head = '<thead><tr><th>ファイル</th><th>ホットスポット</th><th>変更回数</th><th>CC合計</th><th>LOC(実効)</th></tr></thead>';
+  var body = '<tbody>' + rows.map(function (h) {
+    return '<tr data-file-id="' + escapeHtml(h.file_id) + '" class="hotspot-row-link"><td>' + escapeHtml(h.file_id) + '</td><td>' +
+      fmtHotspot(h.hotspot) + '</td><td>' + fmt(h.churn_commits) + '</td><td>' + fmt(h.cc_total) + '</td><td>' + fmt(h.loc_code) + '</td></tr>';
+  }).join('') + '</tbody>';
+  table.innerHTML = head + body;
+  qsa('tr.hotspot-row-link', table).forEach(function (tr) {
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', function () { highlightMetricsRow(tr.dataset.fileId); });
+  });
+}
+
 /* ---- CSV / JSON export ---- */
 var METRICS_EXPORT_COLUMNS = [
   'path', 'language', 'loc_total', 'loc_code', 'loc_comment', 'loc_blank',
   'functions', 'classes', 'cc_total', 'cc_max', 'mi', 'fan_in', 'fan_out',
-  'fan_out_external', 'pagerank', 'betweenness', 'closeness', 'degree_centrality'
+  'fan_out_external', 'pagerank', 'betweenness', 'closeness', 'degree_centrality',
+  'churn_commits', 'hotspot'
 ];
 
 function csvEscapeField(v) {
@@ -1264,8 +1410,9 @@ function renderFilesMetricsTable() {
     return '<th data-key="' + c.key + '" class="sortable-th">' + escapeHtml(c.label) + arrow + '</th>';
   }).join('') + '</tr></thead>';
   var tbody = '<tbody>' + rows.map(function (r) {
-    return '<tr>' + FILE_METRIC_COLUMNS.map(function (c) {
-      return '<td>' + escapeHtml(fmt(r[c.key])) + '</td>';
+    return '<tr data-file-id="' + escapeHtml(r.id) + '">' + FILE_METRIC_COLUMNS.map(function (c) {
+      var text = c.key === 'hotspot' ? fmtHotspot(r[c.key]) : fmt(r[c.key]);
+      return '<td>' + escapeHtml(text) + '</td>';
     }).join('') + '</tr>';
   }).join('') + '</tbody>';
   table.innerHTML = thead + tbody;
@@ -1277,6 +1424,18 @@ function renderFilesMetricsTable() {
       renderFilesMetricsTable();
     });
   });
+}
+
+// Scrolls/highlights the files-metrics-table row for `fid` (used by the
+// hotspot scatter's point-click interaction).
+function highlightMetricsRow(fid) {
+  var table = byId('files-metrics-table');
+  qsa('tr.row-highlight', table).forEach(function (tr) { tr.classList.remove('row-highlight'); });
+  var row = table.querySelector('tr[data-file-id="' + CSS.escape(fid) + '"]');
+  if (row) {
+    row.classList.add('row-highlight');
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
 }
 
 function renderWorstCcTable() {

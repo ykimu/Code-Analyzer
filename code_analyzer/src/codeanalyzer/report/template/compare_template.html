@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Analyzer 比較レポート</title>
+<style>
+/* ==== Design tokens (matches report_template.html's palette) ==== */
+:root{
+  --bg:#f5f6f8; --panel-bg:#ffffff; --border:#dde1e6; --border-soft:#e9ebef;
+  --text:#1b1f24; --text-muted:#5b6470; --accent:#0072B2; --accent-dark:#00527f;
+  --green:#1b7f42; --green-bg:#e6f4ea; --amber:#8a6100; --amber-bg:#fdf1d6;
+  --red:#c0392b; --red-bg:#fbe7e4; --grey:#6b7280; --grey-bg:#eef0f3;
+  --shadow:0 1px 2px rgba(20,20,30,0.06),0 1px 6px rgba(20,20,30,0.05);
+  --radius:8px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;
+  background:var(--bg); color:var(--text); font-size:14px; line-height:1.5;
+}
+h1,h2,h3,h4{margin:0 0 8px 0; font-weight:600;}
+h2{font-size:16px; border-bottom:1px solid var(--border-soft); padding-bottom:6px; margin-bottom:12px;}
+h3{font-size:13px; color:var(--text-muted); margin-top:16px;}
+table{border-collapse:collapse; width:100%;}
+.hidden{display:none !important;}
+.muted{color:var(--text-muted); font-size:12px;}
+
+header{
+  background:var(--panel-bg); border-bottom:1px solid var(--border);
+  padding:14px 20px; position:sticky; top:0; z-index:100;
+}
+header h1{font-size:17px; margin-bottom:8px;}
+.header-meta{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+.header-meta .side{background:var(--grey-bg); border-radius:var(--radius); padding:8px 12px; font-size:12.5px;}
+.header-meta .side.old-side{border-left:4px solid var(--grey);}
+.header-meta .side.new-side{border-left:4px solid var(--accent);}
+.header-meta .side .tag{font-weight:700; font-size:11px; text-transform:uppercase; color:var(--text-muted); margin-bottom:2px;}
+.header-meta .side dl{margin:0; display:grid; grid-template-columns:auto 1fr; gap:2px 8px;}
+.header-meta .side dt{color:var(--text-muted);}
+.header-meta .side dd{margin:0;}
+
+main{padding:18px 20px 60px 20px; max-width:1200px; margin:0 auto;}
+
+.panel{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:14px 16px; margin-bottom:16px; box-shadow:var(--shadow);
+}
+
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px;}
+.card{
+  background:var(--panel-bg); border:1px solid var(--border); border-radius:var(--radius);
+  padding:12px 14px; box-shadow:var(--shadow);
+}
+.card-label{font-size:12px; color:var(--text-muted); margin-bottom:4px;}
+.card-value{font-size:16px; font-weight:700;}
+.card-value .arrow{margin-left:4px; font-weight:700;}
+.delta-better{color:var(--green);}
+.delta-worse{color:var(--red);}
+.delta-neutral{color:var(--text-muted);}
+
+.two-col{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+@media (max-width:760px){ .two-col{grid-template-columns:1fr;} .header-meta{grid-template-columns:1fr;} }
+
+.file-list{list-style:none; margin:0; padding:0; font-size:12.5px; max-height:340px; overflow:auto;}
+.file-list li{padding:3px 6px; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+.file-list.added li{color:var(--green);}
+.file-list.removed li{color:var(--red);}
+.file-list.empty{color:var(--text-muted); font-family:inherit; font-style:italic;}
+
+.table-scroll{overflow:auto; max-height:520px;}
+.data-table{font-size:12.5px; min-width:600px;}
+.data-table th,.data-table td{border-bottom:1px solid var(--border-soft); padding:6px 10px; text-align:left; white-space:nowrap;}
+.data-table thead th{position:sticky; top:0; background:var(--panel-bg); z-index:1;}
+.data-table td.file-cell{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+.sortable-th{cursor:pointer; user-select:none;}
+.sortable-th:hover{color:var(--accent-dark);}
+.sortable-th .sort-arrow{color:var(--accent); margin-left:3px;}
+
+.dep-list{list-style:none; margin:4px 0; padding:0; font-size:12.5px; max-height:300px; overflow:auto;}
+.dep-list li{padding:3px 0; border-bottom:1px dashed var(--border-soft); font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;}
+.dep-list.added li{color:var(--green);}
+.dep-list.removed li{color:var(--red);}
+.dep-arrow{color:var(--text-muted); margin:0 4px; font-family:inherit;}
+
+.badge{display:inline-block; padding:1px 7px; border-radius:10px; font-size:11px; font-weight:600;}
+.badge-added{background:var(--green-bg); color:var(--green);}
+.badge-removed{background:var(--red-bg); color:var(--red);}
+.badge-new{background:var(--amber-bg); color:var(--amber);}
+.badge-resolved{background:var(--green-bg); color:var(--green);}
+
+#empty-state{
+  text-align:center; padding:60px 20px; color:var(--text-muted);
+}
+#empty-state .big{font-size:20px; font-weight:700; color:var(--text); margin-bottom:8px;}
+
+footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Code Analyzer 比較レポート</h1>
+  <div class="header-meta">
+    <div class="side old-side">
+      <div class="tag">旧 (OLD)</div>
+      <dl>
+        <dt>root</dt><dd id="old-root"></dd>
+        <dt>日時</dt><dd id="old-generated-at"></dd>
+        <dt>リビジョン</dt><dd id="old-git-revision"></dd>
+      </dl>
+    </div>
+    <div class="side new-side">
+      <div class="tag">新 (NEW)</div>
+      <dl>
+        <dt>root</dt><dd id="new-root"></dd>
+        <dt>日時</dt><dd id="new-generated-at"></dd>
+        <dt>リビジョン</dt><dd id="new-git-revision"></dd>
+      </dl>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div id="empty-state" class="hidden">
+    <div class="big">__CA_EMPTY_TEXT__</div>
+    <div>2つの解析結果に検出可能な違いはありませんでした。</div>
+  </div>
+
+  <div id="report-body">
+    <div class="panel">
+      <h2>プロジェクト差分</h2>
+      <div class="cards" id="project-delta-cards"></div>
+      <p id="project-delta-empty" class="muted hidden">プロジェクト全体のメトリクスに変化はありません。</p>
+    </div>
+
+    <div class="panel">
+      <h2>追加/削除ファイル</h2>
+      <div class="two-col">
+        <div>
+          <h3>追加されたファイル (<span id="files-added-count">0</span>)</h3>
+          <ul id="files-added-list" class="file-list added"></ul>
+        </div>
+        <div>
+          <h3>削除されたファイル (<span id="files-removed-count">0</span>)</h3>
+          <ul id="files-removed-list" class="file-list removed"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>変更ファイル（列見出しクリックでソート・既定は |MI差分| 降順）</h2>
+      <div class="table-scroll"><table id="changed-files-table" class="data-table"></table></div>
+      <p id="changed-files-empty" class="muted hidden">メトリクスが変化したファイルはありません。</p>
+    </div>
+
+    <div class="panel">
+      <h2>インポート依存の追加/削除</h2>
+      <div class="two-col">
+        <div>
+          <h3>追加されたインポート (<span id="edges-added-count">0</span>)</h3>
+          <ul id="edges-added-list" class="dep-list added"></ul>
+        </div>
+        <div>
+          <h3>削除されたインポート (<span id="edges-removed-count">0</span>)</h3>
+          <ul id="edges-removed-list" class="dep-list removed"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>循環依存の増減</h2>
+      <div class="two-col">
+        <div>
+          <h3>新規の循環依存 (<span id="cycles-added-count">0</span>)</h3>
+          <ul id="cycles-added-list" class="dep-list added"></ul>
+        </div>
+        <div>
+          <h3>解消された循環依存 (<span id="cycles-removed-count">0</span>)</h3>
+          <ul id="cycles-removed-list" class="dep-list removed"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel hidden" id="hotspots-panel">
+      <h2>ホットスポットの新規/解消</h2>
+      <div class="two-col">
+        <div>
+          <h3>新規ホットスポット (<span id="hotspots-new-count">0</span>)</h3>
+          <ul id="hotspots-new-list" class="dep-list added"></ul>
+        </div>
+        <div>
+          <h3>解消されたホットスポット (<span id="hotspots-resolved-count">0</span>)</h3>
+          <ul id="hotspots-resolved-list" class="dep-list removed"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>Code Analyzer &mdash; 完全オフライン自己完結型比較レポート</footer>
+
+<noscript>このレポートの閲覧にはJavaScriptが必要です。</noscript>
+
+<script>window.__CA_CMP__ = __CA_CMP_JSON__;</script>
+<script>
+(function () {
+'use strict';
+
+var DATA = window.__CA_CMP__ || {};
+
+var METRIC_LABELS = {
+  files: 'ファイル数', loc_total: '総行数', loc_code: 'コード行数',
+  loc_comment: 'コメント行数', loc_blank: '空行数',
+  functions: '関数数', classes: 'クラス数',
+  cc_avg: '平均複雑度', cc_max: '最大複雑度', cc_total: '総複雑度',
+  mi_avg: '平均保守性指数', mi: '保守性指数', cycles_count: '循環依存数',
+  fan_in: 'Fan-in', fan_out: 'Fan-out', pagerank: 'PageRank',
+  betweenness: '媒介中心性', closeness: '近接中心性',
+  degree_centrality: '次数中心性', churn_commits: '変更コミット数',
+  hotspot: 'ホットスポット指数'
+};
+
+var FILE_METRIC_ORDER = [
+  'loc_total', 'loc_code', 'loc_comment', 'loc_blank',
+  'functions', 'classes', 'cc_total', 'cc_max', 'mi',
+  'fan_in', 'fan_out', 'pagerank', 'betweenness', 'closeness',
+  'degree_centrality', 'churn_commits', 'hotspot'
+];
+
+function byId(id) { return document.getElementById(id); }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function fmtNum(v) {
+  if (v === undefined || v === null) return '—';
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? v.toLocaleString('ja-JP')
+                                : v.toLocaleString('ja-JP', { maximumFractionDigits: 4 });
+  }
+  return String(v);
+}
+
+function metricLabel(key) { return METRIC_LABELS[key] || key; }
+
+/* "higher is bad" (red on increase) for loc_-prefixed, cc-prefixed, and
+ * cycles_count metrics; "higher is good" (green on increase) for mi and
+ * mi_avg. Everything else is neutral. */
+function deltaSense(metric) {
+  if (metric.indexOf('loc_') === 0 || metric.indexOf('cc') === 0 || metric === 'cycles_count') return 'bad-up';
+  if (metric.indexOf('mi') === 0) return 'good-up';
+  return null;
+}
+
+function deltaArrowHtml(metric, oldV, newV) {
+  var arrow = '';
+  if (newV > oldV) arrow = '▲'; // ▲
+  else if (newV < oldV) arrow = '▼'; // ▼
+  var cls = 'delta-neutral';
+  var sense = deltaSense(metric);
+  if (arrow && sense) {
+    var isIncrease = newV > oldV;
+    var good = (sense === 'good-up') === isIncrease;
+    cls = good ? 'delta-better' : 'delta-worse';
+  }
+  return '<span class="arrow ' + cls + '">' + arrow + '</span>';
+}
+
+function pairHtml(metric, oldV, newV) {
+  return fmtNum(oldV) + ' → ' + fmtNum(newV) + ' ' + deltaArrowHtml(metric, oldV, newV);
+}
+
+/* =========================================================================
+ * Empty-state detection
+ * ========================================================================= */
+function isEmptyCompare(d) {
+  if (Object.keys(d.project_delta || {}).length) return false;
+  var f = d.files || {};
+  if ((f.added || []).length || (f.removed || []).length || (f.changed || []).length) return false;
+  var e = d.edges || {};
+  if ((e.added || []).length || (e.removed || []).length) return false;
+  var c = d.cycles || {};
+  if ((c.added || []).length || (c.removed || []).length) return false;
+  if (d.hotspots) {
+    var h = d.hotspots;
+    if ((h.new || []).length || (h.resolved || []).length) return false;
+  }
+  return true;
+}
+
+/* =========================================================================
+ * Header
+ * ========================================================================= */
+function renderHeader() {
+  var om = DATA.old_meta || {};
+  var nm = DATA.new_meta || {};
+  byId('old-root').textContent = om.root || '—';
+  byId('old-generated-at').textContent = om.generated_at || '—';
+  byId('old-git-revision').textContent = om.git_revision || '—';
+  byId('new-root').textContent = nm.root || '—';
+  byId('new-generated-at').textContent = nm.generated_at || '—';
+  byId('new-git-revision').textContent = nm.git_revision || '—';
+}
+
+/* =========================================================================
+ * プロジェクト差分
+ * ========================================================================= */
+var PROJECT_METRIC_ORDER = [
+  'files', 'loc_total', 'loc_code', 'loc_comment', 'functions', 'classes',
+  'cc_avg', 'cc_max', 'mi_avg', 'cycles_count'
+];
+
+function renderProjectDelta() {
+  var delta = DATA.project_delta || {};
+  var keys = Object.keys(delta);
+  var container = byId('project-delta-cards');
+  if (!keys.length) {
+    byId('project-delta-empty').classList.remove('hidden');
+    return;
+  }
+  var ordered = PROJECT_METRIC_ORDER.filter(function (k) { return k in delta; })
+    .concat(Object.keys(delta).filter(function (k) { return PROJECT_METRIC_ORDER.indexOf(k) === -1; }).sort());
+  var html = '';
+  ordered.forEach(function (key) {
+    var pair = delta[key];
+    html += '<div class="card"><div class="card-label">' + escapeHtml(metricLabel(key)) + '</div>' +
+      '<div class="card-value">' + pairHtml(key, pair[0], pair[1]) + '</div></div>';
+  });
+  container.innerHTML = html;
+}
+
+/* =========================================================================
+ * 追加/削除ファイル
+ * ========================================================================= */
+function renderFileList(listId, countId, ids) {
+  byId(countId).textContent = String(ids.length);
+  var el = byId(listId);
+  if (!ids.length) {
+    el.innerHTML = '<li class="empty">なし</li>';
+    return;
+  }
+  el.innerHTML = ids.map(function (id) { return '<li>' + escapeHtml(id) + '</li>'; }).join('');
+}
+
+function renderFilesAddedRemoved() {
+  var f = DATA.files || {};
+  renderFileList('files-added-list', 'files-added-count', f.added || []);
+  renderFileList('files-removed-list', 'files-removed-count', f.removed || []);
+}
+
+/* =========================================================================
+ * 変更ファイル table
+ * ========================================================================= */
+var changedRows = [];   // [{file_id, deltas}]
+var changedColumns = []; // metric keys present across all changed rows
+var currentSort = { col: '__mi_abs__', dir: 'desc' };
+
+function computeChangedColumns(rows) {
+  var present = {};
+  rows.forEach(function (r) {
+    Object.keys(r.deltas).forEach(function (k) { present[k] = true; });
+  });
+  var ordered = FILE_METRIC_ORDER.filter(function (k) { return present[k]; });
+  var extra = Object.keys(present).filter(function (k) { return FILE_METRIC_ORDER.indexOf(k) === -1; }).sort();
+  return ordered.concat(extra);
+}
+
+function rowSortValue(row, col) {
+  if (col === '__mi_abs__') {
+    var mi = row.deltas.mi;
+    return mi ? Math.abs(mi[1] - mi[0]) : 0;
+  }
+  if (col === 'file_id') return row.file_id;
+  var d = row.deltas[col];
+  return d ? Math.abs(d[1] - d[0]) : -Infinity;
+}
+
+function sortRows() {
+  var col = currentSort.col;
+  var dir = currentSort.dir === 'asc' ? 1 : -1;
+  changedRows.sort(function (a, b) {
+    var av = rowSortValue(a, col);
+    var bv = rowSortValue(b, col);
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return a.file_id < b.file_id ? -1 : (a.file_id > b.file_id ? 1 : 0);
+  });
+}
+
+function renderChangedFilesTable() {
+  var rows = (DATA.files || {}).changed || [];
+  changedRows = rows.slice();
+  if (!changedRows.length) {
+    byId('changed-files-empty').classList.remove('hidden');
+    byId('changed-files-table').innerHTML = '';
+    return;
+  }
+  changedColumns = computeChangedColumns(changedRows);
+  sortRows();
+  drawChangedFilesTable();
+}
+
+function sortArrow(col) {
+  if (currentSort.col !== col) return '';
+  return currentSort.dir === 'asc' ? ' <span class="sort-arrow">▲</span>' : ' <span class="sort-arrow">▼</span>';
+}
+
+function drawChangedFilesTable() {
+  var table = byId('changed-files-table');
+  var theadCols = '<th class="sortable-th" data-col="file_id">ファイル' + sortArrow('file_id') + '</th>' +
+    changedColumns.map(function (c) {
+      var label = c === 'mi' ? 'MI' : metricLabel(c);
+      var sortCol = (c === 'mi') ? '__mi_abs__' : c;
+      return '<th class="sortable-th" data-col="' + sortCol + '">' + escapeHtml(label) + sortArrow(sortCol) + '</th>';
+    }).join('');
+  var bodyRows = changedRows.map(function (row) {
+    var cells = changedColumns.map(function (c) {
+      var d = row.deltas[c];
+      return '<td>' + (d ? pairHtml(c, d[0], d[1]) : '—') + '</td>';
+    }).join('');
+    return '<tr><td class="file-cell">' + escapeHtml(row.file_id) + '</td>' + cells + '</tr>';
+  }).join('');
+  table.innerHTML = '<thead><tr>' + theadCols + '</tr></thead><tbody>' + bodyRows + '</tbody>';
+
+  Array.prototype.slice.call(table.querySelectorAll('.sortable-th')).forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col = th.getAttribute('data-col');
+      if (currentSort.col === col) {
+        currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        currentSort.col = col;
+        currentSort.dir = 'desc';
+      }
+      sortRows();
+      drawChangedFilesTable();
+    });
+  });
+}
+
+/* =========================================================================
+ * インポート依存の追加/削除
+ * ========================================================================= */
+function renderEdgeList(listId, countId, edges) {
+  byId(countId).textContent = String(edges.length);
+  var el = byId(listId);
+  if (!edges.length) {
+    el.innerHTML = '<li class="empty">なし</li>';
+    return;
+  }
+  el.innerHTML = edges.map(function (e) {
+    return '<li>' + escapeHtml(e.src) + '<span class="dep-arrow">→</span>' + escapeHtml(e.dst) + '</li>';
+  }).join('');
+}
+
+function renderEdges() {
+  var e = DATA.edges || {};
+  renderEdgeList('edges-added-list', 'edges-added-count', e.added || []);
+  renderEdgeList('edges-removed-list', 'edges-removed-count', e.removed || []);
+}
+
+/* =========================================================================
+ * 循環依存の増減
+ * ========================================================================= */
+function renderCycleList(listId, countId, cycles) {
+  byId(countId).textContent = String(cycles.length);
+  var el = byId(listId);
+  if (!cycles.length) {
+    el.innerHTML = '<li class="empty">なし</li>';
+    return;
+  }
+  el.innerHTML = cycles.map(function (cyc) {
+    return '<li>' + escapeHtml(cyc.join(' ↔ ')) + '</li>';
+  }).join('');
+}
+
+function renderCycles() {
+  var c = DATA.cycles || {};
+  renderCycleList('cycles-added-list', 'cycles-added-count', c.added || []);
+  renderCycleList('cycles-removed-list', 'cycles-removed-count', c.removed || []);
+}
+
+/* =========================================================================
+ * ホットスポットの新規/解消
+ * ========================================================================= */
+function renderHotspotList(listId, countId, entries) {
+  byId(countId).textContent = String(entries.length);
+  var el = byId(listId);
+  if (!entries.length) {
+    el.innerHTML = '<li class="empty">なし</li>';
+    return;
+  }
+  el.innerHTML = entries.map(function (h) {
+    return '<li>' + escapeHtml(h.file_id) +
+      ' <span class="muted">(hotspot=' + fmtNum(h.hotspot) +
+      ', churn=' + fmtNum(h.churn_commits) +
+      ', cc=' + fmtNum(h.cc_total) + ')</span></li>';
+  }).join('');
+}
+
+function renderHotspots() {
+  if (!DATA.hotspots) return;
+  byId('hotspots-panel').classList.remove('hidden');
+  var h = DATA.hotspots;
+  renderHotspotList('hotspots-new-list', 'hotspots-new-count', h.new || []);
+  renderHotspotList('hotspots-resolved-list', 'hotspots-resolved-count', h.resolved || []);
+}
+
+/* =========================================================================
+ * Entry point
+ * ========================================================================= */
+function main() {
+  renderHeader();
+  if (isEmptyCompare(DATA)) {
+    byId('empty-state').classList.remove('hidden');
+    byId('report-body').classList.add('hidden');
+    return;
+  }
+  renderProjectDelta();
+  renderFilesAddedRemoved();
+  renderChangedFilesTable();
+  renderEdges();
+  renderCycles();
+  renderHotspots();
+}
+
+main();
+})();
+</script>
+
+</body>
+</html>

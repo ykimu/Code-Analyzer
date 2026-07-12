@@ -30,6 +30,7 @@ import datetime
 import itertools
 import json
 import os
+import shutil
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,16 +41,22 @@ from urllib.parse import parse_qs, urlsplit
 from codeanalyzer.cli import DEFAULT_OUT_DIR, _git_revision, _validate_dir
 from codeanalyzer.core.model import TOOL_VERSION
 from codeanalyzer.core.pipeline import analyze_project
+from codeanalyzer.metrics.churn import apply_churn, collect_churn
 from codeanalyzer.metrics.engine import compute_metrics
+from codeanalyzer.report.compare import build_compare_html, compare_analyses
 from codeanalyzer.report.html_builder import build_html
 from codeanalyzer.report.json_writer import write_json
 
 #: Phase labels surfaced to the browser (see gui.html's phase indicator).
 PHASE_SCAN = "走査・解析"
 PHASE_METRICS = "メトリクス"
+PHASE_CHURN = "履歴解析"
 PHASE_REPORT = "レポート生成"
 PHASE_DONE = "完了"
 PHASE_ERROR = "エラー"
+
+#: /api/report-file's ``&file=`` whitelist (v1.3: also serves compare.html).
+_REPORT_FILE_WHITELIST = ("report.html", "compare.html")
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "template"
 _MAX_RECENT = 10
@@ -68,6 +75,39 @@ def _recent_path() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".code_analyzer_gui.json"
+
+
+def _snapshots_dir() -> Path:
+    """Directory holding per-job analysis.json snapshots (v1.3).
+
+    Derived from the resolved recent-state file's directory (so the
+    ``CODE_ANALYZER_GUI_STATE`` override keeps tests fully isolated):
+    ``<dirname of state file>/code_analyzer_snapshots/``.
+
+    Why snapshots exist: two analyze runs of the SAME project share the
+    default ``out_dir`` (``<path>/code-analyzer-out``), so the second run
+    overwrites the first ``analysis.json`` -- which would make the primary
+    temporal-compare use case (analyze -> edit code -> re-analyze ->
+    compare) impossible if compare read from ``out_dir``. Each successful
+    job therefore copies its ``analysis.json`` here, and ``/api/compare``
+    reads ONLY these snapshots.
+    """
+    return _recent_path().parent / "code_analyzer_snapshots"
+
+
+def _snapshot_analysis(job_id: str, out_dir: Path) -> Optional[str]:
+    """Copy ``out_dir/analysis.json`` into the snapshots dir; returns the
+    absolute snapshot path (or None on any failure -- best-effort, a
+    snapshot failure must not fail the job)."""
+    try:
+        snap_dir = _snapshots_dir()
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        ts_compact = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        snap_path = snap_dir / f"snap-{job_id}-{ts_compact}.json"
+        shutil.copyfile(out_dir / "analysis.json", snap_path)
+        return str(snap_path)
+    except OSError:
+        return None
 
 
 def _load_recent() -> list[dict[str, Any]]:
@@ -98,8 +138,19 @@ def _save_recent(entries: list[dict[str, Any]]) -> None:
 def _append_recent(entry: dict[str, Any]) -> None:
     entries = _load_recent()
     entries.append(entry)
-    entries = entries[-_MAX_RECENT:]
-    _save_recent(entries)
+    kept = entries[-_MAX_RECENT:]
+    dropped = entries[:-_MAX_RECENT]
+    if dropped:
+        # prune snapshot files that no surviving recent entry references
+        referenced = {e.get("snapshot") for e in kept if e.get("snapshot")}
+        for e in dropped:
+            snap = e.get("snapshot")
+            if snap and snap not in referenced:
+                try:
+                    Path(snap).unlink()
+                except OSError:
+                    pass  # best-effort cleanup
+    _save_recent(kept)
 
 
 def _recent_list_with_status() -> list[dict[str, Any]]:
@@ -128,6 +179,14 @@ class GuiState:
     def __init__(self) -> None:
         self.jobs: dict[str, dict[str, Any]] = {}
         self._counter = itertools.count(1)
+        self._cmp_counter = itertools.count(1)
+        #: names of compare artifacts THIS server generated (cmp-<n>.html /
+        #: cmp-<n>.json in the snapshots dir) -- the /api/compare-file
+        #: whitelist. In-memory on purpose: a compare_url is used right
+        #: away by the tab the click opened; it does not need to survive a
+        #: server restart, and a restart-scoped whitelist can never be
+        #: coaxed into serving a file the server did not itself write.
+        self.compare_files: set[str] = set()
         self._lock = threading.Lock()
 
     def new_job(self, out_dir: Path) -> str:
@@ -141,6 +200,15 @@ class GuiState:
                 "out_dir": str(out_dir),
             }
         return job_id
+
+    def new_compare_name(self) -> str:
+        """Reserve the next ``cmp-<n>`` artifact base name and whitelist
+        both its .html and .json files."""
+        with self._lock:
+            base = f"cmp-{next(self._cmp_counter)}"
+            self.compare_files.add(f"{base}.html")
+            self.compare_files.add(f"{base}.json")
+        return base
 
 
 def _start_analyze(state: GuiState, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -170,6 +238,12 @@ def _start_analyze(state: GuiState, body: dict[str, Any]) -> tuple[int, dict[str
         max_nodes = int(body.get("max_nodes", 800))
     except (TypeError, ValueError):
         max_nodes = 800
+    try:
+        # 履歴解析ウィンドウ(日): 0 (or any non-positive value) disables
+        # churn/hotspot analysis entirely -- see module docstring.
+        churn_window = int(body.get("churn_window", 365))
+    except (TypeError, ValueError):
+        churn_window = 365
 
     options = {
         "include": include,
@@ -177,6 +251,7 @@ def _start_analyze(state: GuiState, body: dict[str, Any]) -> tuple[int, dict[str
         "no_gitignore": no_gitignore,
         "embed_sources": embed_sources,
         "max_nodes": max_nodes,
+        "churn_window": churn_window,
     }
 
     job_id = state.new_job(out_dir)
@@ -210,6 +285,12 @@ def _run_job(state: GuiState, job_id: str, path: Path, out_dir: Path,
         result.meta.generated_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         result.meta.git_revision = _git_revision(path)
 
+        job["phase"] = PHASE_CHURN
+        churn_window = options.get("churn_window", 365)
+        if churn_window and churn_window > 0:
+            churn = collect_churn(path, window_days=churn_window)
+            apply_churn(result, churn)
+
         job["phase"] = PHASE_REPORT
         out_dir.mkdir(parents=True, exist_ok=True)
         write_json(result, out_dir / "analysis.json", include_defuse=False)
@@ -230,6 +311,9 @@ def _run_job(state: GuiState, job_id: str, path: Path, out_dir: Path,
             "out_dir": str(out_dir),
             "timestamp": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "summary": summary,
+            # v1.3: point-in-time copy of analysis.json for /api/compare
+            # (out_dir is overwritten by the next run of the same project).
+            "snapshot": _snapshot_analysis(job_id, out_dir),
         })
     except Exception as e:  # noqa: BLE001 - background job error boundary
         job["error"] = str(e)
@@ -265,29 +349,133 @@ def _report_bytes(state: GuiState, job_id: Optional[str]) -> Optional[bytes]:
         return None
 
 
-def _report_file_response(out_dir_str: Optional[str]) -> tuple[int, Optional[bytes], dict[str, Any]]:
-    """Serve ``<out_dir>/report.html`` for a *recorded* recent analysis.
+def _report_file_response(out_dir_str: Optional[str],
+                          file_name: str = "report.html") -> tuple[int, Optional[bytes], dict[str, Any]]:
+    """Serve ``<out_dir>/<file_name>`` for a *recorded* recent analysis.
 
     Security: browsers block ``file://`` navigation from an ``http://`` page,
     so the 最近の解析 rows need an http URL -- but an endpoint that serves an
     arbitrary ``?path=`` would be a local file-disclosure hole. The requested
     ``out_dir`` must therefore EXACTLY match an ``out_dir`` recorded in the
     persisted recent-analyses state (a whitelist the server itself wrote);
-    anything else is refused with 403. A whitelisted-but-deleted report file
-    yields 404.
+    anything else is refused with 403. ``file_name`` (v1.3, ``&file=``) is
+    itself whitelisted to ``report.html``/``compare.html`` -- anything else
+    (including path-traversal attempts) is also a 403, never a filesystem
+    lookup. A whitelisted-but-deleted report file yields 404.
 
     Returns ``(status, html_bytes_or_None, error_obj)``.
     """
     if not out_dir_str:
         return 403, None, {"error": "path が指定されていません"}
+    if file_name not in _REPORT_FILE_WHITELIST:
+        return 403, None, {"error": "許可されていないファイル名です"}
     allowed = {entry.get("out_dir") for entry in _load_recent()}
     if out_dir_str not in allowed:
         return 403, None, {"error": "許可されていないパスです"}
-    report_path = Path(out_dir_str) / "report.html"
+    report_path = Path(out_dir_str) / file_name
     try:
         return 200, report_path.read_bytes(), {}
     except FileNotFoundError:
-        return 404, None, {"error": "report.html が見つかりません"}
+        return 404, None, {"error": f"{file_name} が見つかりません"}
+    except OSError as e:
+        return 404, None, {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# /api/compare (v1.3: compare two recent analyses by snapshot)
+# ---------------------------------------------------------------------------
+def _load_snapshot(entry: dict[str, Any], label: str) -> tuple[Optional[dict], Optional[str]]:
+    """Load a recent entry's snapshot JSON; ``(data, None)`` or ``(None, err)``."""
+    snap = entry.get("snapshot")
+    if not snap:
+        return None, f"{label}の解析スナップショットが記録されていません（v1.3より前の解析結果は比較できません）"
+    try:
+        text = Path(snap).read_text(encoding="utf-8")
+    except OSError:
+        return None, f"{label}の解析スナップショットが見つかりません（削除された可能性があります）: {snap}"
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as e:
+        return None, f"{label}の解析スナップショットが壊れています: {snap} ({e})"
+
+
+def _start_compare(state: GuiState, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Compare two *recorded* recent analyses, identified by their
+    ``timestamp`` field (``{"a_ts": ..., "b_ts": ...}``), reading the
+    per-job SNAPSHOT files -- never ``out_dir`` (which the next run of the
+    same project overwrites; see :func:`_snapshots_dir`).
+
+    Identity/disambiguation decision (documented): the ``timestamp``
+    (second-resolution ISO 8601) is the entry's identity. If several recent
+    entries share a timestamp, the LAST one in the persisted list (i.e. the
+    most recently recorded) wins -- the UI keys its checkboxes by the same
+    timestamp, so duplicate-timestamp entries are inherently
+    indistinguishable there too, and collapsing to the newest matches what
+    the user sees on top. ``a_ts == b_ts`` is therefore always refused.
+    Which side is "old" vs. "new" is decided by comparing the two
+    timestamps (ISO 8601 -> lexical == chronological), NOT by the a/b
+    request order -- checkboxes can be ticked in either order.
+
+    Timestamps not present in the recent list are refused with 403 (same
+    whitelist philosophy as /api/report-file). Missing/corrupt snapshot
+    files yield a clear 400 JSON error. compare.json/compare.html are
+    written into the snapshots dir as ``cmp-<n>.json``/``cmp-<n>.html`` and
+    served through the /api/compare-file whitelist.
+    """
+    a_ts = body.get("a_ts")
+    b_ts = body.get("b_ts")
+    if not a_ts or not b_ts:
+        return 400, {"error": "a_ts と b_ts の両方を指定してください"}
+    if a_ts == b_ts:
+        return 400, {"error": "同一の解析結果（または同一タイムスタンプの解析結果）同士は比較できません"}
+
+    by_ts: dict[str, dict[str, Any]] = {}
+    for entry in _load_recent():
+        ts = entry.get("timestamp")
+        if ts:
+            by_ts[ts] = entry  # last one wins (see docstring)
+
+    if a_ts not in by_ts or b_ts not in by_ts:
+        return 403, {"error": "許可されていない解析結果です（最近の解析一覧に存在しません）"}
+
+    old_ts, new_ts = (a_ts, b_ts) if a_ts <= b_ts else (b_ts, a_ts)
+    old_data, err = _load_snapshot(by_ts[old_ts], "古い側")
+    if err:
+        return 400, {"error": err}
+    new_data, err = _load_snapshot(by_ts[new_ts], "新しい側")
+    if err:
+        return 400, {"error": err}
+
+    try:
+        cmp = compare_analyses(old_data, new_data)
+    except ValueError as e:
+        return 400, {"error": str(e)}
+
+    snap_dir = _snapshots_dir()
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    base = state.new_compare_name()
+    (snap_dir / f"{base}.json").write_text(
+        json.dumps(cmp, ensure_ascii=False, indent=2), encoding="utf-8")
+    build_compare_html(cmp, snap_dir / f"{base}.html")
+
+    return 200, {"compare_url": f"/api/compare-file?name={base}.html"}
+
+
+def _compare_file_response(state: GuiState,
+                           name: Optional[str]) -> tuple[int, Optional[bytes], dict[str, Any]]:
+    """Serve a server-generated compare artifact from the snapshots dir.
+
+    ``name`` must exactly match a name this server instance itself wrote
+    (``GuiState.compare_files``) -- anything else, including traversal
+    attempts, is 403 without ever touching the filesystem.
+    """
+    if not name or name not in state.compare_files:
+        return 403, None, {"error": "許可されていないファイル名です"}
+    path = _snapshots_dir() / name
+    try:
+        return 200, path.read_bytes(), {}
+    except FileNotFoundError:
+        return 404, None, {"error": f"{name} が見つかりません"}
     except OSError as e:
         return 404, None, {"error": str(e)}
 
@@ -407,7 +595,16 @@ class _GuiRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/report-file":
             out_dir_str = qs.get("path", [None])[0]
-            status, html, err = _report_file_response(out_dir_str)
+            file_name = qs.get("file", ["report.html"])[0]
+            status, html, err = _report_file_response(out_dir_str, file_name)
+            if html is not None:
+                self._send_html_bytes(status, html)
+            else:
+                self._send_json(status, err)
+            return
+        if parsed.path == "/api/compare-file":
+            name = qs.get("name", [None])[0]
+            status, html, err = _compare_file_response(self._state, name)
             if html is not None:
                 self._send_html_bytes(status, html)
             else:
@@ -415,20 +612,35 @@ class _GuiRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not found"})
 
+    def _read_json_body(self) -> tuple[bool, Any]:
+        """Returns ``(ok, body_or_error_obj)``; ``ok=False`` -> already a
+        ready-to-send ``{"error": ...}`` dict."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            body = json.loads(raw.decode("utf-8")) if raw else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return False, {"error": "リクエストボディが不正なJSONです"}
+        if not isinstance(body, dict):
+            return False, {"error": "リクエストボディが不正です"}
+        return True, body
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib naming convention
         parsed = urlsplit(self.path)
         if parsed.path == "/api/analyze":
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b""
-            try:
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                self._send_json(400, {"error": "リクエストボディが不正なJSONです"})
-                return
-            if not isinstance(body, dict):
-                self._send_json(400, {"error": "リクエストボディが不正です"})
+            ok, body = self._read_json_body()
+            if not ok:
+                self._send_json(400, body)
                 return
             status, obj = _start_analyze(self._state, body)
+            self._send_json(status, obj)
+            return
+        if parsed.path == "/api/compare":
+            ok, body = self._read_json_body()
+            if not ok:
+                self._send_json(400, body)
+                return
+            status, obj = _start_compare(self._state, body)
             self._send_json(status, obj)
             return
         self._send_json(404, {"error": "not found"})

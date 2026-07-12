@@ -17,6 +17,8 @@ import base64
 import gzip
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -55,7 +57,7 @@ def test_analyze_happy_path(tmp_path):
     assert html_path.exists()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["schema_version"] == "1.1"
+    assert data["schema_version"] == "1.2"
     assert len(data["metrics"]["files"]) > 0
     assert data["meta"]["generated_at"]  # ISO timestamp injected by the CLI
 
@@ -442,6 +444,198 @@ def test_metrics_bad_path_exit_2(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# v1.3: impact --diff, compare subcommand, churn flags
+# ---------------------------------------------------------------------------
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+
+
+def _build_git_repo(tmp_path: Path, name: str = "repo") -> Path:
+    """A one-commit git repo seeded from ``tests/fixtures/impact_project``
+    (reuses the repo-building pattern from ``tests/test_diff_impact.py``)."""
+    repo = tmp_path / name
+    repo.mkdir()
+    for src in sorted(IMPACT.iterdir()):
+        if src.is_file():
+            shutil.copy(src, repo / src.name)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "tester@example.com")
+    _git(repo, "config", "user.name", "Tester")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "initial")
+    return repo
+
+
+def test_impact_diff_worktree_happy_path(tmp_path, capsys):
+    repo = _build_git_repo(tmp_path)
+    # uncommitted edit inside the body of c() -- an analyzable hunk.
+    (repo / "mod_c.py").write_text("def c(val):\n    result = val + 100\n    return result\n\n\nX = 1\n")
+
+    out_dir = tmp_path / "out"
+    rc = main(["impact", str(repo), "--diff", "-o", str(out_dir), "-q"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ハンク" in out
+
+    data = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    assert data["impact"]["query"]["diff"] == "worktree"
+    assert data["impact"]["hunks"]
+
+
+def test_impact_neither_target_nor_diff_exit_2(tmp_path, capsys):
+    repo = _build_git_repo(tmp_path)
+    rc = main(["impact", str(repo), "-q"])
+    assert rc == 2
+    assert "エラー" in capsys.readouterr().err
+
+
+def test_impact_both_target_and_diff_exit_2(tmp_path, capsys):
+    repo = _build_git_repo(tmp_path)
+    rc = main(["impact", str(repo), "mod_c.py:2", "--diff", "-q"])
+    assert rc == 2
+    assert "エラー" in capsys.readouterr().err
+
+
+def test_compare_happy_path(tmp_path):
+    proj_a = tmp_path / "proj_a"
+    shutil.copytree(SAMPLE, proj_a)
+    out_a = tmp_path / "out_a"
+    rc = main(["analyze", str(proj_a), "-o", str(out_a), "--no-churn", "--json-only", "-q"])
+    assert rc == 0
+
+    proj_b = tmp_path / "proj_b"
+    shutil.copytree(SAMPLE, proj_b)
+    # modify one file so the two analyses actually differ.
+    target = proj_b / "py" / "models.py"
+    target.write_text(target.read_text(encoding="utf-8") + "\n\ndef extra_fn():\n    return 42\n")
+    out_b = tmp_path / "out_b"
+    rc = main(["analyze", str(proj_b), "-o", str(out_b), "--no-churn", "--json-only", "-q"])
+    assert rc == 0
+
+    cmp_out = tmp_path / "cmp_out"
+    rc = main(["compare", str(out_a / "analysis.json"), str(out_b / "analysis.json"),
+               "-o", str(cmp_out)])
+    assert rc == 0
+
+    cmp_json_path = cmp_out / "compare.json"
+    cmp_html_path = cmp_out / "compare.html"
+    assert cmp_json_path.exists()
+    assert cmp_html_path.exists()
+
+    cmp_data = json.loads(cmp_json_path.read_text(encoding="utf-8"))
+    assert cmp_data["files"]["changed"]
+
+    html = cmp_html_path.read_text(encoding="utf-8")
+    assert "__CA_CMP_JSON__" not in html
+    assert "__CA_EMPTY_TEXT__" not in html
+
+
+def test_compare_json_only_skips_html(tmp_path):
+    out_dir = tmp_path / "out"
+    rc = main(["analyze", str(SAMPLE), "-o", str(out_dir), "--no-churn", "--json-only", "-q"])
+    assert rc == 0
+
+    cmp_out = tmp_path / "cmp_out"
+    rc = main(["compare", str(out_dir / "analysis.json"), str(out_dir / "analysis.json"),
+               "-o", str(cmp_out), "--json-only"])
+    assert rc == 0
+    assert (cmp_out / "compare.json").exists()
+    assert not (cmp_out / "compare.html").exists()
+
+
+def test_compare_corrupt_json_exit_2(tmp_path, capsys):
+    good = tmp_path / "good.json"
+    good.write_text("{}", encoding="utf-8")
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not valid json !!", encoding="utf-8")
+
+    rc = main(["compare", str(bad), str(good)])
+    assert rc == 2
+    assert "エラー" in capsys.readouterr().err
+
+
+def test_compare_missing_required_keys_exit_2(tmp_path, capsys):
+    a = tmp_path / "a.json"
+    a.write_text("{}", encoding="utf-8")
+    b = tmp_path / "b.json"
+    b.write_text("{}", encoding="utf-8")
+
+    rc = main(["compare", str(a), str(b)])
+    assert rc == 2
+    assert "エラー" in capsys.readouterr().err
+
+
+def test_analyze_no_churn_flag_omits_churn_keys(tmp_path):
+    repo = tmp_path / "repo"
+    shutil.copytree(SAMPLE, repo)
+    out_dir = tmp_path / "out"
+    rc = main(["analyze", str(repo), "-o", str(out_dir), "--no-churn", "--json-only", "-q"])
+    assert rc == 0
+    data = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    for fm in data["metrics"]["files"].values():
+        assert "churn_commits" not in fm
+        assert "hotspot" not in fm
+    assert "hotspots" not in data["metrics"]
+
+
+def test_analyze_churn_window_zero_behaves_like_no_churn(tmp_path):
+    # Contract (model.py "v1.3 additions"): --churn-window 0 = churn
+    # DISABLED -- collect_churn is never called, so no churn keys and no
+    # metrics["churn"] section appear (identical to --no-churn), even on a
+    # real git repo where a "--since 0 days" window would otherwise produce
+    # meaningless all-zero rows.
+    repo = _build_git_repo(tmp_path)
+    out_dir = tmp_path / "out"
+    rc = main(["analyze", str(repo), "-o", str(out_dir), "--churn-window", "0",
+               "--json-only", "-q"])
+    assert rc == 0
+    data = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    for fm in data["metrics"]["files"].values():
+        assert "churn_commits" not in fm
+        assert "hotspot" not in fm
+    assert "churn" not in data["metrics"]
+    assert "hotspots" not in data["metrics"]
+
+
+def test_analyze_churn_all_full_history(tmp_path):
+    # --churn-all = full history: churn runs with window_days=None, which
+    # serializes as null in analysis.json.
+    repo = _build_git_repo(tmp_path)
+    out_dir = tmp_path / "out"
+    rc = main(["analyze", str(repo), "-o", str(out_dir), "--churn-all",
+               "--json-only", "-q"])
+    assert rc == 0
+    data = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    churn = data["metrics"]["churn"]
+    assert churn["available"] is True
+    assert churn["window_days"] is None
+    assert churn["commits_scanned"] >= 1
+
+
+def test_analyze_negative_churn_window_exit_2(tmp_path, capsys):
+    repo = tmp_path / "proj"
+    shutil.copytree(SAMPLE, repo)
+    rc = main(["analyze", str(repo), "--churn-window", "-5", "--json-only", "-q"])
+    assert rc == 2
+    assert "churn-window" in capsys.readouterr().err
+
+
+def test_analyze_non_git_dir_churn_unavailable(tmp_path, capsys):
+    # SAMPLE itself is not a git repo (nor is any tmp copy of it).
+    repo = tmp_path / "repo"
+    shutil.copytree(SAMPLE, repo)
+    out_dir = tmp_path / "out"
+    rc = main(["analyze", str(repo), "-o", str(out_dir), "--json-only", "-q"])
+    assert rc == 0
+    data = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    assert data["metrics"]["churn"]["available"] is False
+    # summary suppression: no hotspot data -> no ホットスポット上位 line.
+    out = capsys.readouterr().out
+    assert "ホットスポット上位" not in out
+
+
+# ---------------------------------------------------------------------------
 # shared
 # ---------------------------------------------------------------------------
 def test_version(capsys):
@@ -450,7 +644,7 @@ def test_version(capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert TOOL_VERSION in out
-    assert TOOL_VERSION == "1.2.0"
+    assert TOOL_VERSION == "1.3.0"
 
 
 def test_no_command_prints_help_exit_2(capsys):

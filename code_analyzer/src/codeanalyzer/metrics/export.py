@@ -39,11 +39,16 @@ from codeanalyzer.core.model import AnalysisResult, SymbolKind
 # ---------------------------------------------------------------------------
 
 #: metric columns pulled from metrics["files"][fid], in header order.
+#: v1.3: churn_commits/hotspot (see metrics/churn.py) are appended at the
+#: end -- present (non-None) only for projects where git churn data was
+#: computed (churn["available"] is True); ``None`` (renders as ""/null)
+#: otherwise, same missing-key convention as every other column here.
 _METRIC_COLUMNS: list[str] = [
     "loc_total", "loc_code", "loc_comment", "loc_blank",
     "functions", "classes", "cc_total", "cc_max", "mi",
     "fan_in", "fan_out", "fan_out_external",
     "pagerank", "betweenness", "closeness", "degree_centrality",
+    "churn_commits", "hotspot",
 ]
 
 #: full per-file export column order (path/language come from FileInfo).

@@ -412,6 +412,57 @@ def format_impact_text(impact: dict) -> str:
     if "error" in impact:
         return f"エラー: {impact['error']}"
 
+    # diff mode: multiple origins + a hunk table (contract: "hunks" present)
+    if "hunks" in impact:
+        via_label = {"call": "呼び出し", "import": "インポート",
+                     "dataflow": "データフロー"}
+        conf_label = {"certain": "確実", "inferred": "推定"}
+        dlines: list[str] = []
+        q = impact.get("query", {})
+        dlines.append(f"影響範囲解析 (差分モード): {q.get('diff')} "
+                      f"(深度 {q.get('depth')})")
+        dlines.append("起点シンボル:")
+        for o in impact.get("origins", []):
+            dlines.append(f"  - {o.get('symbol_id')} "
+                          f"[{o.get('kind')}] {o.get('symbol_name')}")
+        dlines.append("")
+        dlines.append("差分ハンク:")
+        for h in impact.get("hunks", []):
+            reason = f"  ({h['reason']})" if h.get("reason") else ""
+            dlines.append(f"  {h['file']}:{h['start_line']}-{h['end_line']}  "
+                          f"[{h['status']}]{reason}")
+        sv = impact.get("sliced_vars", [])
+        if sv:
+            dlines.append("")
+            dlines.append(f"スライス対象変数: {', '.join(sv)}")
+        dlines.append("")
+        dlines.append("影響を受けるファイル / シンボル:")
+        for af in impact.get("affected_files", []):
+            dlines.append(f"  {af['file_id']}")
+            for s in af["symbols"]:
+                lns = ",".join(str(x) for x in s["lines"]) or "-"
+                dlines.append(
+                    f"    - {s['symbol_id']}  "
+                    f"行:{lns}  "
+                    f"信頼度:{conf_label.get(s['confidence'], s['confidence'])}  "
+                    f"経路:{via_label.get(s['via'], s['via'])}  "
+                    f"hops:{s['hops']}"
+                )
+        boundaries = impact.get("unresolved_boundaries", [])
+        if boundaries:
+            dlines.append("")
+            dlines.append("警告 (追跡打ち切り境界 / 偽陰性の可能性):")
+            for b in boundaries:
+                dlines.append(f"  ! {b['symbol_id']} 行{b['line']}: {b['reason']}")
+        st = impact.get("stats", {})
+        dlines.append("")
+        footer = (f"統計: ファイル {st.get('files', 0)} / "
+                  f"シンボル {st.get('symbols', 0)}")
+        if st.get("max_hops_reached"):
+            footer += "  (深度上限に到達: 一部の依存は未探索)"
+        dlines.append(footer)
+        return "\n".join(dlines)
+
     lines: list[str] = []
     q = impact.get("query", {})
     o = impact.get("origin", {})

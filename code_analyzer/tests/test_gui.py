@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import time
 import urllib.error
@@ -262,6 +263,202 @@ def test_report_file_whitelisted_deleted_and_forbidden(gui, tmp_path):
     status, body = _get(gui, f"/api/report-file?path={q}")
     assert status == 404
     assert json.loads(body)["error"]
+
+
+# ---------------------------------------------------------------------------
+# churn option (v1.3: 履歴解析ウィンドウ(日), 0 = 無効)
+# ---------------------------------------------------------------------------
+def test_analyze_churn_window_zero_skips_churn(gui, tmp_path):
+    # churn_window=0 must skip churn ENTIRELY server-side (0=無効): no
+    # churn keys on any metrics row and no metrics["churn"] section --
+    # never a "0 days" git log window.
+    out_dir = tmp_path / "out_zero"
+    status, body = _post(gui, "/api/analyze",
+                          {"path": str(SAMPLE), "out_dir": str(out_dir), "churn_window": 0})
+    assert status == 200
+    data = _poll_until_done(gui, json.loads(body)["job_id"])
+    assert data["error"] is None
+
+    analysis = json.loads((out_dir / "analysis.json").read_text(encoding="utf-8"))
+    for fm in analysis["metrics"]["files"].values():
+        assert "churn_commits" not in fm
+        assert "hotspot" not in fm
+    assert "churn" not in analysis["metrics"]
+    assert "hotspots" not in analysis["metrics"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/compare (v1.3: snapshot-based temporal compare)
+#
+# Entries are identified by their `timestamp` field (a_ts/b_ts). Documented
+# disambiguation decision (see server._start_compare): timestamps are the
+# entry identity; if two recent entries ever share a timestamp (1-second
+# resolution), the most recently recorded one wins, and a_ts == b_ts is
+# always refused -- the UI keys its checkboxes by the same timestamp, so
+# duplicate-timestamp entries are indistinguishable there too.
+# ---------------------------------------------------------------------------
+_CMP_PAYLOAD_RE = re.compile(r"window\.__CA_CMP__\s*=\s*(\{.*?\});\s*</script>", re.S)
+
+
+def _run_job_and_wait(gui, path, out_dir) -> dict:
+    status, body = _post(gui, "/api/analyze", {"path": str(path), "out_dir": str(out_dir)})
+    assert status == 200
+    return _poll_until_done(gui, json.loads(body)["job_id"])
+
+
+def _recent_entries(gui) -> list:
+    status, body = _get(gui, "/api/recent")
+    assert status == 200
+    return json.loads(body)
+
+
+def test_compare_temporal_happy_path(gui, tmp_path):
+    """The primary use case: analyze -> edit code -> re-analyze the SAME
+    path (same default-ish out_dir) -> compare the two runs. Works because
+    each job snapshots its analysis.json; the second run overwriting
+    out_dir/analysis.json must not matter."""
+    proj = tmp_path / "proj"
+    shutil.copytree(SAMPLE, proj)
+    out_dir = tmp_path / "out"  # SAME out_dir for both runs, like the default
+
+    _run_job_and_wait(gui, proj, out_dir)
+
+    # Timestamps have 1-second resolution -- cross a second boundary so the
+    # two entries are distinguishable (documented identity limitation).
+    time.sleep(1.1)
+
+    # edit the project in place: append a function body line
+    target = proj / "py" / "models.py"
+    target.write_text(target.read_text(encoding="utf-8")
+                      + "\n\ndef extra_fn():\n    return 1\n")
+
+    _run_job_and_wait(gui, proj, out_dir)
+
+    recent = _recent_entries(gui)
+    assert len(recent) >= 2
+    # most-recent-first; both runs share path AND out_dir
+    ts_new, ts_old = recent[0]["timestamp"], recent[1]["timestamp"]
+    assert ts_new != ts_old
+    assert recent[0]["out_dir"] == recent[1]["out_dir"] == str(out_dir)
+    assert recent[0]["snapshot"] and recent[1]["snapshot"]
+    assert recent[0]["snapshot"] != recent[1]["snapshot"]
+
+    # a/b order is deliberately "wrong" (a=newer): the server must order
+    # old/new by timestamp, not by the request keys.
+    status, body = _post(gui, "/api/compare", {"a_ts": ts_new, "b_ts": ts_old})
+    assert status == 200
+    data = json.loads(body)
+    assert data["compare_url"].startswith("/api/compare-file?name=cmp-")
+
+    status, body = _get(gui, data["compare_url"])
+    assert status == 200
+    html = body.decode("utf-8")
+    assert "__CA_CMP_JSON__" not in html
+    m = _CMP_PAYLOAD_RE.search(html)
+    assert m is not None, "embedded compare payload not found"
+    cmp_data = json.loads(m.group(1))
+    # the appended function changed py/models.py's metrics (old -> new,
+    # i.e. loc/functions INCREASED -- confirms old/new were not swapped)
+    changed = {c["file_id"]: c["deltas"] for c in cmp_data["files"]["changed"]}
+    assert "py/models.py" in changed
+    old_funcs, new_funcs = changed["py/models.py"]["functions"]
+    assert new_funcs > old_funcs
+
+    # compare artifacts live in the snapshots dir, not in out_dir
+    snap_dir = Path(gui_server_mod._snapshots_dir())
+    assert list(snap_dir.glob("cmp-*.json"))
+    assert list(snap_dir.glob("cmp-*.html"))
+    assert not (out_dir / "compare.json").exists()
+    assert not (out_dir / "compare.html").exists()
+
+
+def test_compare_unknown_timestamp_is_403(gui, tmp_path):
+    out_a = tmp_path / "out_a"
+    _run_job_and_wait(gui, SAMPLE, out_a)
+    ts = _recent_entries(gui)[0]["timestamp"]
+
+    status, body = _post(gui, "/api/compare",
+                          {"a_ts": "2001-01-01T00:00:00+00:00", "b_ts": ts})
+    assert status == 403
+    assert json.loads(body)["error"]
+
+    # a_ts == b_ts (same entry / indistinguishable duplicates) -> refused
+    status, body = _post(gui, "/api/compare", {"a_ts": ts, "b_ts": ts})
+    assert status == 400
+    assert json.loads(body)["error"]
+
+
+def test_compare_deleted_snapshot_is_clear_error(gui, tmp_path):
+    proj = tmp_path / "proj"
+    shutil.copytree(SAMPLE, proj)
+    out_dir = tmp_path / "out"
+    _run_job_and_wait(gui, proj, out_dir)
+    time.sleep(1.1)
+    _run_job_and_wait(gui, proj, out_dir)
+
+    recent = _recent_entries(gui)
+    ts_new, ts_old = recent[0]["timestamp"], recent[1]["timestamp"]
+    # delete the older run's snapshot file out from under the server
+    Path(recent[1]["snapshot"]).unlink()
+
+    status, body = _post(gui, "/api/compare", {"a_ts": ts_old, "b_ts": ts_new})
+    assert status == 400
+    err = json.loads(body)["error"]
+    assert "スナップショット" in err
+
+
+def test_snapshot_pruning_on_recent_overflow(gui, tmp_path):
+    # 11 successful jobs -> the recent list keeps 10; the pruned (oldest)
+    # entry's snapshot file must be deleted, the surviving 10 kept.
+    proj = tmp_path / "proj"
+    shutil.copytree(FIXTURES / "impact_project", proj)  # small fixture: fast jobs
+    out_dir = tmp_path / "out"
+
+    _run_job_and_wait(gui, proj, out_dir)
+    first_snapshot = _recent_entries(gui)[0]["snapshot"]
+    assert first_snapshot and Path(first_snapshot).exists()
+
+    for _ in range(10):
+        _run_job_and_wait(gui, proj, out_dir)
+
+    recent = _recent_entries(gui)
+    assert len(recent) == 10
+    surviving = [e["snapshot"] for e in recent]
+    assert first_snapshot not in surviving       # oldest entry fell off
+    assert not Path(first_snapshot).exists()     # ...and its file was pruned
+    for snap in surviving:                       # survivors are intact
+        assert snap and Path(snap).exists()
+
+
+def test_compare_file_non_whitelisted_name_is_403(gui, tmp_path):
+    # names the server did not generate itself are refused outright,
+    # including traversal attempts -- whitelist, not sanitization.
+    snap_dir = Path(gui_server_mod._snapshots_dir())
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "cmp-999.html").write_text("<html>rogue</html>", encoding="utf-8")
+
+    status, body = _get(gui, "/api/compare-file?name=cmp-999.html")
+    assert status == 403
+    status, body = _get(gui, "/api/compare-file?name=" + urllib.parse.quote("../recent.json"))
+    assert status == 403
+    status, body = _get(gui, "/api/compare-file")
+    assert status == 403
+
+
+def test_report_file_evil_file_param_is_403(gui, tmp_path):
+    out_a = tmp_path / "out_a"
+    status, body = _post(gui, "/api/analyze", {"path": str(SAMPLE), "out_dir": str(out_a)})
+    assert status == 200
+    _poll_until_done(gui, json.loads(body)["job_id"])
+
+    q = urllib.parse.quote(str(out_a))
+    status, body = _get(gui, f"/api/report-file?path={q}&file=evil.html")
+    assert status == 403
+    assert json.loads(body)["error"]
+
+    # path traversal via &file= is also refused (whitelist, not sanitization)
+    status, body = _get(gui, f"/api/report-file?path={q}&file=../../etc/passwd")
+    assert status == 403
 
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import re
 import subprocess
 import sys
@@ -68,8 +69,11 @@ from typing import Any, Optional
 from codeanalyzer.core.model import TOOL_VERSION
 from codeanalyzer.core.pipeline import analyze_project
 from codeanalyzer.impact.analyzer import analyze_impact, format_impact_text
+from codeanalyzer.impact.diff_impact import analyze_impact_diff
+from codeanalyzer.metrics.churn import apply_churn, collect_churn
 from codeanalyzer.metrics.engine import compute_metrics
 from codeanalyzer.metrics.export import export_metrics, export_symbols_csv
+from codeanalyzer.report.compare import build_compare_html, compare_analyses
 from codeanalyzer.report.html_builder import build_html
 from codeanalyzer.report.json_writer import write_json
 
@@ -126,12 +130,16 @@ def _git_revision(root: Path) -> str:
 
 
 def _run_pipeline(path: Path, quiet: bool, *, includes=None, excludes=None,
-                   no_gitignore: bool = False, compile_commands: str | None = None):
+                   no_gitignore: bool = False, compile_commands: str | None = None,
+                   run_churn: bool = False, churn_window: Optional[int] = 365):
     """Run scan/parse/resolve + metrics, injecting meta.generated_at/git_revision.
 
-    Shared by all three subcommands; ``includes``/``excludes``/
-    ``no_gitignore``/``compile_commands`` only apply to ``analyze`` (the
-    other subcommands use the pipeline defaults).
+    Shared by all subcommands; ``includes``/``excludes``/``no_gitignore``/
+    ``compile_commands`` only apply to ``analyze`` (the other subcommands
+    use the pipeline defaults). ``run_churn`` (v1.3) additionally runs
+    ``metrics.churn.collect_churn``/``apply_churn`` after the metrics phase
+    -- ``churn_window`` is the ``--since`` window in days (``None`` = full
+    history).
     """
     if not quiet:
         _eprint("[1/3] 走査/パース/解決 中...")
@@ -152,6 +160,14 @@ def _run_pipeline(path: Path, quiet: bool, *, includes=None, excludes=None,
     compute_metrics(result, sources)
     if not quiet:
         _eprint("[2/3] 完了")
+
+    if run_churn:
+        if not quiet:
+            _eprint("履歴解析 中...")
+        churn = collect_churn(path, window_days=churn_window)
+        apply_churn(result, churn)
+        if not quiet:
+            _eprint(f"履歴解析 完了: {'利用可能' if churn['available'] else '利用不可 (' + str(churn['reason']) + ')'}")
 
     result.meta.generated_at = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     result.meta.git_revision = _git_revision(path)
@@ -181,6 +197,10 @@ def _print_end_summary(result, json_path: Path, html_path: Optional[Path]) -> No
     print(f"ファイル数: {meta.file_count}")
     print(f"パース失敗: {meta.parse_failures}")
     print(f"未解決インポート: {meta.unresolved_imports}")
+    hotspots = (result.metrics or {}).get("hotspots") or []
+    if hotspots:
+        top3 = ", ".join(h["file_id"] for h in hotspots[:3])
+        print(f"ホットスポット上位: {top3}")
     print(f"出力: {json_path}")
     if html_path is not None:
         print(f"      {html_path}")
@@ -195,10 +215,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         _eprint(f"エラー: {err}")
         return 2
 
+    run_churn, churn_window, churn_err = _resolve_churn(args)
+    if churn_err:
+        _eprint(f"エラー: {churn_err}")
+        return 2
+
     result = _run_pipeline(
         path, args.quiet,
         includes=args.include, excludes=args.exclude,
         no_gitignore=args.no_gitignore, compile_commands=args.compile_commands,
+        run_churn=run_churn, churn_window=churn_window,
     )
 
     # SPEC F8 --max-nodes: see module docstring for the current limitation
@@ -223,21 +249,36 @@ def cmd_impact(args: argparse.Namespace) -> int:
         _eprint(f"エラー: {err}")
         return 2
 
-    m = _TARGET_RE.match(args.target)
-    if not m:
-        _eprint(
-            f"エラー: TARGET は FILE:LINE または FILE:START-END の形式で指定してください "
-            f"(入力値: {args.target!r})"
-        )
+    has_target = args.target is not None
+    has_diff = args.diff is not None
+    if has_target and has_diff:
+        _eprint("エラー: TARGET と --diff は同時に指定できません．いずれか一方のみを指定してください．")
         return 2
-    file_arg = m.group("file")
-    start_line = int(m.group("start"))
-    end_group = m.group("end")
-    end_line = int(end_group) if end_group is not None else None
+    if not has_target and not has_diff:
+        _eprint("エラー: TARGET または --diff のいずれかを指定してください．")
+        return 2
 
-    result = _run_pipeline(path, args.quiet)
+    if has_diff:
+        # diff mode: run the full analyze pipeline (incl. churn), then
+        # derive hunks from git and merge per-hunk impact results.
+        result = _run_pipeline(path, args.quiet, run_churn=True, churn_window=365)
+        impact = analyze_impact_diff(result, path, args.diff, max_depth=args.depth)
+    else:
+        m = _TARGET_RE.match(args.target)
+        if not m:
+            _eprint(
+                f"エラー: TARGET は FILE:LINE または FILE:START-END の形式で指定してください "
+                f"(入力値: {args.target!r})"
+            )
+            return 2
+        file_arg = m.group("file")
+        start_line = int(m.group("start"))
+        end_group = m.group("end")
+        end_line = int(end_group) if end_group is not None else None
 
-    impact = analyze_impact(result, file_arg, start_line, end_line, max_depth=args.depth)
+        result = _run_pipeline(path, args.quiet)
+        impact = analyze_impact(result, file_arg, start_line, end_line, max_depth=args.depth)
+
     if "error" in impact:
         _eprint(f"エラー: {impact['error']}")
         return 2
@@ -345,9 +386,15 @@ def cmd_metrics(args: argparse.Namespace) -> int:
         _eprint("エラー: --top は 0 以上の整数を指定してください")
         return 2
 
+    run_churn, churn_window, churn_err = _resolve_churn(args)
+    if churn_err:
+        _eprint(f"エラー: {churn_err}")
+        return 2
+
     # metrics-only run: no output files, so phase progress would just be
     # noise ahead of the table -- keep stderr quiet unconditionally.
-    result = _run_pipeline(path, quiet=True)
+    result = _run_pipeline(path, quiet=True,
+                           run_churn=run_churn, churn_window=churn_window)
 
     if args.format == "table":
         # --sort-by/--top apply ONLY to the table renderer; csv/md/json go
@@ -373,6 +420,64 @@ def cmd_metrics(args: argparse.Namespace) -> int:
         sym_path.write_text(export_symbols_csv(result), encoding="utf-8", newline="")
         _eprint(f"出力: {sym_path}")
 
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# compare
+# ---------------------------------------------------------------------------
+def _load_analysis_json(path: Path, label: str) -> tuple[Optional[dict], Optional[str]]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        return None, f"{label} を読み込めません: {path} ({e})"
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        return None, f"{label} のJSON解析に失敗しました: {path} ({e})"
+    return data, None
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    old, err = _load_analysis_json(Path(args.old_json), "OLD_JSON")
+    if err:
+        _eprint(f"エラー: {err}")
+        return 2
+    new, err = _load_analysis_json(Path(args.new_json), "NEW_JSON")
+    if err:
+        _eprint(f"エラー: {err}")
+        return 2
+
+    try:
+        cmp = compare_analyses(old, new)
+    except ValueError as e:
+        _eprint(f"エラー: {e}")
+        return 2
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "compare.json"
+    json_path.write_text(json.dumps(cmp, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    html_path: Optional[Path] = None
+    if not args.json_only:
+        html_path = out_dir / "compare.html"
+        build_compare_html(cmp, html_path)
+
+    files = cmp["files"]
+    edges = cmp["edges"]
+    cycles = cmp["cycles"]
+    cycle_delta = len(cycles["added"]) - len(cycles["removed"])
+    print("=== 比較サマリ ===")
+    print(f"変更ファイル数: {len(files['changed'])}")
+    print(f"追加ファイル数: {len(files['added'])}")
+    print(f"削除ファイル数: {len(files['removed'])}")
+    print(f"依存追加数: {len(edges['added'])}")
+    print(f"依存削除数: {len(edges['removed'])}")
+    print(f"循環増減: {cycle_delta:+d}")
+    print(f"出力: {json_path}")
+    if html_path is not None:
+        print(f"      {html_path}")
     return 0
 
 
@@ -403,6 +508,40 @@ _NO_EMBED_SOURCES_HELP = (
 def _add_embed_sources_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-embed-sources", action="store_true",
                    help=_NO_EMBED_SOURCES_HELP)
+
+
+def _add_churn_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--churn-window", type=int, default=365, metavar="DAYS",
+                   help="git変更履歴（チャーン/ホットスポット）の集計期間（日数，既定365）．"
+                        "正の整数で期間を指定．0 を指定すると履歴解析そのものを無効化する"
+                        "（--no-churn と同じ）．全履歴を対象にする場合は --churn-all を使用．")
+    p.add_argument("--churn-all", action="store_true",
+                   help="git変更履歴を期間で区切らず全履歴を対象に集計する"
+                        "（--churn-window は無視される）．")
+    p.add_argument("--no-churn", action="store_true",
+                   help="git変更履歴の解析（チャーン/ホットスポット計算）を無効化する．")
+
+
+def _resolve_churn(args: argparse.Namespace) -> tuple[bool, Optional[int], Optional[str]]:
+    """Translate the churn CLI flags into ``(run_churn, window_days, error)``.
+
+    Contract (model.py "v1.3 additions"): positive window_days = ``--since``
+    window; ``None`` = full history (``--churn-all``); churn DISABLED
+    (``--no-churn`` or ``--churn-window 0``) = collect_churn is never called
+    and no churn keys appear in the metrics. Negative windows are a user
+    error (exit 2 upstream, via the returned message).
+    """
+    if getattr(args, "no_churn", False):
+        return False, None, None
+    if getattr(args, "churn_all", False):
+        return True, None, None
+    window = args.churn_window
+    if window == 0:
+        return False, None, None
+    if window < 0:
+        return False, None, ("--churn-window は 0 以上の整数を指定してください"
+                             "（0 = 履歴解析を無効化，全履歴は --churn-all）")
+    return True, window, None
 
 
 def _add_pipeline_scope_args(p: argparse.ArgumentParser) -> None:
@@ -447,6 +586,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "metrics.ui.max_nodes として出力データに記録される．")
     p_analyze.add_argument("--with-defuse", action="store_true",
                            help="analysis.json に def-use（データフロー）レコードを含める．")
+    _add_churn_args(p_analyze)
     _add_embed_sources_arg(p_analyze)
     _add_pipeline_scope_args(p_analyze)
     p_analyze.set_defaults(func=cmd_analyze)
@@ -455,8 +595,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_impact = sub.add_parser(
         "impact", help="指定した行（範囲）の変更影響範囲を解析する．")
     p_impact.add_argument("path", help="解析対象のプロジェクトルート")
-    p_impact.add_argument("target", metavar="FILE:LINE[-END]",
-                          help="影響範囲解析の起点（例: src/app.py:42 または src/app.py:10-20）")
+    p_impact.add_argument("target", metavar="FILE:LINE[-END]", nargs="?", default=None,
+                          help="影響範囲解析の起点（例: src/app.py:42 または src/app.py:10-20）．"
+                               "--diff と同時指定不可（どちらか一方が必須）．")
+    p_impact.add_argument("--diff", nargs="?", const="worktree", default=None, metavar="SPEC",
+                          help="git diff に基づく差分駆動の影響範囲解析．SPEC省略時は"
+                               "作業ツリーの未コミット変更（HEAD比較）．"
+                               "SPECにはリビジョン（例: HEAD~1）や範囲（例: A..B）を指定可能．"
+                               "TARGET と同時指定不可．")
     p_impact.add_argument("--depth", type=int, default=10, metavar="N",
                           help="逆依存探索の最大深度（既定10）．")
     _add_embed_sources_arg(p_impact)
@@ -487,7 +633,19 @@ def build_parser() -> argparse.ArgumentParser:
                                 "CSV形式でファイルに出力する．")
     p_metrics.add_argument("-v", "--verbose", action="store_true",
                            help="予期しないエラー発生時にスタックトレース全体を表示する．")
+    _add_churn_args(p_metrics)
     p_metrics.set_defaults(func=cmd_metrics)
+
+    # -- compare ------------------------------------------------------------
+    p_compare = sub.add_parser(
+        "compare", help="2つの analysis.json を比較し compare.json / compare.html を出力する．")
+    p_compare.add_argument("old_json", metavar="OLD_JSON", help="比較対象の古い analysis.json のパス")
+    p_compare.add_argument("new_json", metavar="NEW_JSON", help="比較対象の新しい analysis.json のパス")
+    p_compare.add_argument("-o", "--out-dir", default=DEFAULT_OUT_DIR,
+                           help=f"出力先ディレクトリ（既定: ./{DEFAULT_OUT_DIR}）．")
+    p_compare.add_argument("--json-only", action="store_true",
+                           help="compare.json のみ出力し compare.html を生成しない．")
+    p_compare.set_defaults(func=cmd_compare)
 
     # -- gui --------------------------------------------------------------
     p_gui = sub.add_parser(

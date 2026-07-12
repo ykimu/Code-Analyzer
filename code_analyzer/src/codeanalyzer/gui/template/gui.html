@@ -137,8 +137,11 @@ label.field{display:block; font-size:12px; color:var(--text-muted); margin-botto
   font-size:12.5px; word-break:break-all;
 }
 .recent-meta{font-size:11.5px; color:var(--text-muted); margin-top:2px;}
-.recent-actions{display:flex; gap:6px; flex-shrink:0;}
+.recent-ts{font-weight:600; color:var(--text); font-size:12px;}
+.recent-actions{display:flex; gap:6px; flex-shrink:0; align-items:center;}
 #recent-empty{color:var(--text-muted); font-size:13px;}
+.recent-compare-checkbox{margin-right:4px;}
+.recent-compare-label{display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--text-muted);}
 
 footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:center;}
 </style>
@@ -190,6 +193,10 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
           <label class="field" for="opt-out-dir">出力先（既定: プロジェクト/code-analyzer-out）</label>
           <input type="text" id="opt-out-dir" placeholder="（既定のまま）">
         </div>
+        <div class="field-row">
+          <label class="field" for="opt-churn-window">履歴解析ウィンドウ(日)（0=無効）</label>
+          <input type="number" id="opt-churn-window" value="365" min="0">
+        </div>
       </div>
       <label class="checkbox-row">
         <input type="checkbox" id="opt-no-gitignore"> .gitignoreを無視
@@ -211,6 +218,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
       <div id="phase-steps">
         <div class="phase-step" data-phase="走査・解析">走査・解析</div>
         <div class="phase-step" data-phase="メトリクス">メトリクス</div>
+        <div class="phase-step" data-phase="履歴解析">履歴解析</div>
         <div class="phase-step" data-phase="レポート生成">レポート生成</div>
       </div>
     </div>
@@ -229,8 +237,12 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   <!-- ============ 最近の解析 ============ -->
   <section class="panel">
     <h2>最近の解析</h2>
+    <div id="compare-toolbar" class="hidden" style="margin-bottom:10px;">
+      <button id="compare-btn" class="btn btn-primary btn-sm" type="button">選択した2件を比較</button>
+    </div>
     <ul id="recent-list"></ul>
     <div id="recent-empty" class="hidden">まだ解析履歴はありません．</div>
+    <div id="compare-error" class="error-box hidden"></div>
   </section>
 </main>
 
@@ -244,6 +256,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
     currentPath: null,
     pollTimer: null,
     jobId: null,
+    compareSelection: [],   // entry TIMESTAMPS, in the order the user ticked them
   };
 
   // ---- small DOM helpers ----
@@ -343,7 +356,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   });
 
   // ---- phase indicator ----
-  var PHASE_ORDER = ["走査・解析", "メトリクス", "レポート生成"];
+  var PHASE_ORDER = ["走査・解析", "メトリクス", "履歴解析", "レポート生成"];
   function updatePhaseSteps(currentPhase){
     var idx = PHASE_ORDER.indexOf(currentPhase);
     document.querySelectorAll(".phase-step").forEach(function(el){
@@ -371,6 +384,10 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
       embed_sources: !$("opt-no-embed").checked,
       max_nodes: parseInt($("opt-max-nodes").value, 10) || 800,
       out_dir: $("opt-out-dir").value.trim() || undefined,
+      churn_window: (function(){
+        var v = parseInt($("opt-churn-window").value, 10);
+        return isNaN(v) ? 365 : v;
+      })(),
     };
   }
 
@@ -381,6 +398,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
     $("opt-no-gitignore").checked = !!options.no_gitignore;
     $("opt-no-embed").checked = options.embed_sources === false;
     $("opt-max-nodes").value = options.max_nodes || 800;
+    $("opt-churn-window").value = (options.churn_window != null) ? options.churn_window : 365;
   }
 
   function runAnalyze(){
@@ -405,6 +423,7 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
       no_gitignore: opts.no_gitignore,
       embed_sources: opts.embed_sources,
       max_nodes: opts.max_nodes,
+      churn_window: opts.churn_window,
     };
     if (opts.out_dir){ body.out_dir = opts.out_dir; }
 
@@ -501,10 +520,20 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
   }
 
   function renderRecent(entries){
+    // Selection is keyed by entry TIMESTAMP (not out_dir): two runs of the
+    // SAME project share the default out_dir, so out_dir cannot tell them
+    // apart -- the timestamp can (the server's /api/compare uses the same
+    // identity). Drop selections whose timestamp no longer appears in the
+    // (possibly pruned) recent list.
+    var stillPresent = {};
+    entries.forEach(function(e){ if (e.timestamp){ stillPresent[e.timestamp] = true; } });
+    state.compareSelection = state.compareSelection.filter(function(t){ return stillPresent[t]; });
+
     var list = $("recent-list");
     list.innerHTML = "";
     if (!entries.length){
       show($("recent-empty"));
+      updateCompareToolbar();
       return;
     }
     hide($("recent-empty"));
@@ -519,12 +548,41 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
       var metaDiv = document.createElement("div");
       metaDiv.className = "recent-meta";
       var files = (entry.summary && entry.summary.files != null) ? entry.summary.files : "-";
-      metaDiv.textContent = fmtTimestamp(entry.timestamp) + " – ファイル数: " + files;
+      // 日時 rendered prominently (own styled span) so two runs of the
+      // same path are easy to tell apart in the list.
+      var tsSpan = document.createElement("span");
+      tsSpan.className = "recent-ts";
+      tsSpan.textContent = "日時: " + fmtTimestamp(entry.timestamp);
+      metaDiv.appendChild(tsSpan);
+      metaDiv.appendChild(document.createTextNode(" – ファイル数: " + files));
       main.appendChild(pathDiv);
       main.appendChild(metaDiv);
 
       var actions = document.createElement("div");
       actions.className = "recent-actions";
+
+      // 比較対象 checkbox: only for entries that carry a snapshot (older
+      // pre-v1.3 entries have nothing comparable on disk).
+      if (entry.timestamp && entry.snapshot){
+        var compareLabel = document.createElement("label");
+        compareLabel.className = "recent-compare-label";
+        var compareCb = document.createElement("input");
+        compareCb.type = "checkbox";
+        compareCb.className = "recent-compare-checkbox";
+        compareCb.checked = state.compareSelection.indexOf(entry.timestamp) !== -1;
+        compareCb.addEventListener("change", function(){
+          var idx = state.compareSelection.indexOf(entry.timestamp);
+          if (this.checked && idx === -1){
+            state.compareSelection.push(entry.timestamp);
+          } else if (!this.checked && idx !== -1){
+            state.compareSelection.splice(idx, 1);
+          }
+          updateCompareToolbar();
+        });
+        compareLabel.appendChild(compareCb);
+        compareLabel.appendChild(document.createTextNode("比較対象"));
+        actions.appendChild(compareLabel);
+      }
 
       var rerunBtn = document.createElement("button");
       rerunBtn.className = "btn btn-sm";
@@ -556,7 +614,50 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:11.5px; text-align:
       li.appendChild(actions);
       list.appendChild(li);
     });
+    updateCompareToolbar();
   }
+
+  // ---- compare two recent analyses ----
+  function updateCompareToolbar(){
+    var toolbar = $("compare-toolbar");
+    if (state.compareSelection.length === 2){
+      show(toolbar);
+    } else {
+      hide(toolbar);
+    }
+  }
+
+  function showCompareError(message){
+    var el = $("compare-error");
+    el.textContent = "エラー: " + message;
+    show(el);
+  }
+
+  $("compare-btn").addEventListener("click", function(){
+    hide($("compare-error"));
+    if (state.compareSelection.length !== 2){ return; }
+    var btn = this;
+    btn.disabled = true;
+    fetchJSON("/api/compare", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      // a/b order does not matter: the server orders old/new by timestamp.
+      body: JSON.stringify({
+        a_ts: state.compareSelection[0],
+        b_ts: state.compareSelection[1],
+      }),
+    }).then(function(r){
+      btn.disabled = false;
+      if (!r.ok){
+        showCompareError(r.data.error || "比較を実行できませんでした．");
+        return;
+      }
+      window.open(r.data.compare_url, "_blank", "noopener");
+    }).catch(function(e){
+      btn.disabled = false;
+      showCompareError(String(e));
+    });
+  });
 
   // ---- init ----
   resetRunUI();

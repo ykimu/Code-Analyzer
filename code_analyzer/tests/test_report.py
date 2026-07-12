@@ -142,31 +142,45 @@ def build_sample_result() -> AnalysisResult:
             },
         },
         "files": {
+            # v1.3: churn_commits/hotspot present on most files (git repo
+            # case) -- native/core.cpp intentionally omits them too, on top
+            # of already omitting the v1.1 centrality keys, to exercise the
+            # report's "—" fallback for BOTH generations of optional metrics.
             "src/app.py": {"loc_total": 40, "loc_code": 32, "loc_comment": 5, "loc_blank": 3,
                             "functions": 1, "classes": 1, "cc_total": 5, "cc_max": 3, "mi": 82.1,
                             "fan_in": 1, "fan_out": 2, "fan_out_external": 0,
                             "pagerank": 0.182453, "betweenness": 0.100000,
-                            "closeness": 0.416667, "degree_centrality": 0.6},
+                            "closeness": 0.416667, "degree_centrality": 0.6,
+                            "churn_commits": 9, "churn_added": 40, "churn_deleted": 12,
+                            "last_commit": "2026-07-01", "hotspot": 0.8571},
             "src/utils.py": {"loc_total": 25, "loc_code": 20, "loc_comment": 3, "loc_blank": 2,
                               "functions": 2, "classes": 0, "cc_total": 4, "cc_max": 2, "mi": 88.4,
                               "fan_in": 2, "fan_out": 1, "fan_out_external": 1,
                               "pagerank": 0.204112, "betweenness": 0.200000,
-                              "closeness": 0.500000, "degree_centrality": 0.6},
+                              "closeness": 0.500000, "degree_centrality": 0.6,
+                              "churn_commits": 5, "churn_added": 18, "churn_deleted": 4,
+                              "last_commit": "2026-06-20", "hotspot": 0.4286},
             "src/models.py": {"loc_total": 30, "loc_code": 24, "loc_comment": 2, "loc_blank": 4,
                                "functions": 0, "classes": 2, "cc_total": 3, "cc_max": 2, "mi": 90.0,
                                "fan_in": 1, "fan_out": 1, "fan_out_external": 0,
                                "pagerank": 0.176220, "betweenness": 0.000000,
-                               "closeness": 0.416667, "degree_centrality": 0.4},
+                               "closeness": 0.416667, "degree_centrality": 0.4,
+                               "churn_commits": 2, "churn_added": 6, "churn_deleted": 1,
+                               "last_commit": "2026-05-11", "hotspot": 0.1071},
             "web/main.js": {"loc_total": 20, "loc_code": 16, "loc_comment": 1, "loc_blank": 3,
                              "functions": 1, "classes": 0, "cc_total": 2, "cc_max": 2, "mi": 91.2,
                              "fan_in": 0, "fan_out": 1, "fan_out_external": 0,
                              "pagerank": 0.150000, "betweenness": 0.000000,
-                             "closeness": 0.000000, "degree_centrality": 0.2},
+                             "closeness": 0.000000, "degree_centrality": 0.2,
+                             "churn_commits": 0, "churn_added": 0, "churn_deleted": 0,
+                             "last_commit": "", "hotspot": 0.0},
             "web/helpers.js": {"loc_total": 15, "loc_code": 12, "loc_comment": 1, "loc_blank": 2,
                                 "functions": 1, "classes": 0, "cc_total": 1, "cc_max": 1, "mi": 95.5,
                                 "fan_in": 1, "fan_out": 0, "fan_out_external": 0,
                                 "pagerank": 0.143889, "betweenness": 0.000000,
-                                "closeness": 0.000000, "degree_centrality": 0.2},
+                                "closeness": 0.000000, "degree_centrality": 0.2,
+                                "churn_commits": 1, "churn_added": 3, "churn_deleted": 0,
+                                "last_commit": "2026-04-02", "hotspot": 0.0357},
             # native/core.cpp intentionally omits the v1.1 centrality keys to
             # exercise the report's "—" fallback for missing metrics.
             "native/core.cpp": {"loc_total": 80, "loc_code": 61, "loc_comment": 8, "loc_blank": 11,
@@ -188,6 +202,21 @@ def build_sample_result() -> AnalysisResult:
             "nodes": 6, "edges": 6, "density": 0.2, "avg_degree": 2.0,
             "weakly_connected_components": 2, "largest_component_size": 4,
         },
+        # v1.3 churn/hotspot additions (see core/model.py's "v1.3 additions"
+        # docstring block) -- top-20 list sorted by hotspot desc, file_id asc.
+        "churn": {"available": True, "window_days": 365, "commits_scanned": 17, "reason": None},
+        "hotspots": [
+            {"file_id": "src/app.py", "hotspot": 0.8571, "churn_commits": 9,
+             "cc_total": 5, "loc_code": 32},
+            {"file_id": "src/utils.py", "hotspot": 0.4286, "churn_commits": 5,
+             "cc_total": 4, "loc_code": 20},
+            {"file_id": "src/models.py", "hotspot": 0.1071, "churn_commits": 2,
+             "cc_total": 3, "loc_code": 24},
+            {"file_id": "web/helpers.js", "hotspot": 0.0357, "churn_commits": 1,
+             "cc_total": 1, "loc_code": 12},
+            {"file_id": "web/main.js", "hotspot": 0.0, "churn_commits": 0,
+             "cc_total": 2, "loc_code": 16},
+        ],
     }
 
     # DefUse records (v1.1): only present when include_defuse=True is
@@ -275,7 +304,7 @@ def test_json_writer_round_trips(tmp_path, sample_result):
     assert out_path.read_text(encoding="utf-8") == out_path2.read_text(encoding="utf-8")
 
     # Basic schema sanity.
-    assert loaded["schema_version"] == SCHEMA_VERSION == "1.1"
+    assert loaded["schema_version"] == SCHEMA_VERSION == "1.2"
     assert len(loaded["files"]) == 6
     assert loaded["impact"] is None
     # include_defuse=False by default -> no "defuses" key.
@@ -422,6 +451,57 @@ def test_template_has_export_buttons_and_source_viewer():
     assert 'id="impact-source-viewer"' in text
     assert 'id="export-csv-btn"' in text
     assert 'id="export-json-btn"' in text
+
+
+# ---------------------------------------------------------------------------
+# v1.3: hotspot section / churn columns / treemap hotspot radio
+# ---------------------------------------------------------------------------
+def test_template_has_hotspot_markup():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # hotspot panel (scatter + top-20 table), hidden by default until JS
+    # decides whether metrics.hotspots is non-empty.
+    assert 'id="hotspot-panel"' in text
+    assert 'id="hotspot-scatter-svg"' in text
+    assert 'id="hotspot-table"' in text
+    # file-metrics table gains the two new sortable columns.
+    assert "churn_commits" in text
+    assert "'hotspot'" in text or '"hotspot"' in text
+    assert "変更回数" in text
+    assert "ホットスポット" in text
+    # treemap gains a third, conditionally-shown color-by option.
+    assert 'id="treemap-hotspot-option"' in text
+    assert "ホットスポットで色分け" in text
+    # CSV/JSON export columns extended.
+    assert "'churn_commits', 'hotspot'" in text
+
+
+def test_hotspot_section_present_when_hotspots_data(tmp_path, sample_result):
+    out_path = tmp_path / "report.html"
+    build_html(sample_result, out_path)
+    decoded = _decode_payload(out_path.read_text(encoding="utf-8"))
+    assert decoded["metrics"]["hotspots"]
+    assert decoded["metrics"]["files"]["src/app.py"]["hotspot"] == 0.8571
+    assert decoded["metrics"]["files"]["src/app.py"]["churn_commits"] == 9
+
+
+def test_hotspot_section_gracefully_absent_without_hotspots_data(tmp_path, sample_result):
+    # A project with no git churn data (metrics.hotspots == [] / absent)
+    # must still render -- the hotspot panel/treemap option are hidden
+    # client-side, not omitted from the template.
+    sample_result.metrics.pop("hotspots", None)
+    sample_result.metrics.pop("churn", None)
+    for fm in sample_result.metrics["files"].values():
+        fm.pop("churn_commits", None)
+        fm.pop("hotspot", None)
+    out_path = tmp_path / "report_no_hotspots.html"
+    build_html(sample_result, out_path)
+    decoded = _decode_payload(out_path.read_text(encoding="utf-8"))
+    assert not decoded["metrics"].get("hotspots")
+    # the HTML itself is still well-formed / self-contained (no exception,
+    # no leftover placeholder tokens).
+    html = out_path.read_text(encoding="utf-8")
+    assert "__CA_DATA_B64_GZIP__" not in html
+    assert 'id="hotspot-panel"' in html  # markup exists; hiding is client-side
 
 
 def test_template_inline_script_is_valid_js(tmp_path):

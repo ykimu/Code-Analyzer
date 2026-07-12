@@ -31,6 +31,41 @@ v1.1 metrics additions (contract):
 - metrics["network"] = {"nodes", "edges", "density", "avg_degree",
   "weakly_connected_components", "largest_component_size"}
 - metrics["definitions"] documents each new metric.
+
+v1.3 additions (contract, schema 1.2 / tool 1.3.0 — constants bumped in the
+integration phase, engines must code against these shapes now):
+- metrics["files"][fid] gains (only when the project is a git repo):
+  "churn_commits" (int, commits touching the file within the window),
+  "churn_added"/"churn_deleted" (int, lines from --numstat),
+  "last_commit" (ISO date str), and
+  "hotspot" (float 0-1, 4dp: percentile_rank(churn_commits) *
+             percentile_rank(cc_total); 0.0 when either is 0 or no git).
+- metrics["churn"] = {"available": bool, "window_days": int|null,
+  "commits_scanned": int, "reason": str|null (why unavailable)}
+- metrics["hotspots"] = top-20 list sorted by hotspot desc, then file_id,
+  containing ONLY entries with hotspot > 0 (may be shorter than 20 or empty):
+  [{"file_id", "hotspot", "churn_commits", "cc_total", "loc_code"}]
+- window_days semantics: positive int = --since window; None = full history;
+  0 = churn collection DISABLED (callers must not invoke collect_churn).
+- Impact result for diff mode (analyze_impact_diff): same top-level shape as
+  ImpactResult plus "query": {..., "diff": "<revspec or 'worktree'>"},
+  "hunks": [{"file": file_id, "start_line": int, "end_line": int,
+             "status": "analyzed"|"skipped", "reason": str|null}],
+  "origins": [per-hunk origin objects]; "origin" stays = origins[0] for
+  backward compatibility. affected_files merged across hunks (union lines,
+  min hops, strongest confidence).
+- compare.json (report/compare.py):
+  {"schema_version", "kind": "comparison",
+   "old_meta": {...}, "new_meta": {...},
+   "project_delta": {metric: [old, new]},
+   "files": {"added": [ids], "removed": [ids],
+             "changed": [{"file_id", "deltas": {metric: [old, new]}}]},
+   "edges": {"added": [{src,dst,kind}], "removed": [...]}  (IMPORT edges,
+             dedup by (src,dst,kind), line ignored),
+   "cycles": {"added": [[ids]], "removed": [[ids]]},
+   "hotspots": {"new": [...], "resolved": [...]} (present when both sides
+             carry hotspot data)}
+  All lists stable-sorted; numeric deltas only listed when |old-new| > 1e-9.
 """
 from __future__ import annotations
 
@@ -39,8 +74,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-SCHEMA_VERSION = "1.1"
-TOOL_VERSION = "1.2.0"
+SCHEMA_VERSION = "1.2"
+TOOL_VERSION = "1.3.0"
 
 
 class Language(str, enum.Enum):
