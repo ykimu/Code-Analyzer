@@ -66,6 +66,31 @@ integration phase, engines must code against these shapes now):
    "hotspots": {"new": [...], "resolved": [...]} (present when both sides
              carry hotspot data)}
   All lists stable-sorted; numeric deltas only listed when |old-new| > 1e-9.
+
+v1.6 additions (contract, schema 1.3 / tool 1.6.0):
+- Edge gains "conditional": bool (default False) - True for C/C++ #include
+  edges that appear inside a preprocessor conditional block (#if/#ifdef/
+  #ifndef/#elif/#else region). Serialized always.
+- metrics["resolution"] (computed by the metrics engine from edges):
+  {"calls": {"total", "certain", "inferred", "unresolved", "ambiguous",
+             "certain_pct", "ambiguous_pct" (1dp floats),
+             "non_test": {same counters, edges whose SRC file is not a test
+                          file - the honest number for production code}},
+   "imports": {"total", "certain", "unresolved", "external", "conditional"},
+   "by_language": {lang: {"calls_total", "calls_certain_pct",
+                          "calls_ambiguous_pct"}},
+   "note": str}  # one-line honest description of what the numbers mean
+  calls-family = kinds call/inherit/type_ref. Report shows this in the
+  overview tab as 解決品質 panel; definitions documented.
+- Python type-aware resolution (resolvers): narrows method-call candidate
+  sets using (a) parameter/variable/attribute type annotations,
+  (b) `x = ClassName(...)` constructor assignments (module-local),
+  (c) `self.`/`cls.` receiver -> own class + ancestors via INHERIT edges,
+  (d) `ClassName.method(...)` direct class references.
+  Effect: when narrowing yields exactly 1 candidate -> confidence "certain",
+  ambiguous=False; when it reduces to a smaller set >1 -> keep "inferred"
+  with the smaller candidate set. NEVER widens; never invents candidates
+  outside the name-matched set (per ROADMAP: narrowing only).
 """
 from __future__ import annotations
 
@@ -74,8 +99,8 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-SCHEMA_VERSION = "1.2"
-TOOL_VERSION = "1.5.0"
+SCHEMA_VERSION = "1.3"
+TOOL_VERSION = "1.6.0"
 
 
 class Language(str, enum.Enum):
@@ -164,6 +189,7 @@ class Edge:
     confidence: str = Confidence.CERTAIN.value
     ambiguous: bool = False      # dst is one of several same-name candidates
     line: int = 0                # source line of the reference
+    conditional: bool = False    # v1.6: C/C++ include inside #if/#ifdef block
 
     def key(self) -> tuple:
         return (self.src, self.dst, self.kind, self.line)

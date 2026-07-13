@@ -20,6 +20,11 @@ from codeanalyzer.parsers.base import (
 
 _CLASS_TYPES = {"class_specifier", "struct_specifier"}
 _SCOPE_TYPES = _CLASS_TYPES | {"function_definition", "namespace_definition"}
+# tree-sitter-c/cpp node types that introduce a preprocessor conditional
+# region: an #include whose closest such ancestor is one of these (and is
+# not the whole-file include-guard wrapper, see _detect_include_guard) is
+# marked Edge.conditional=True (v1.6).
+_COND_TYPES = {"preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else"}
 
 
 class CCppParser(LanguageParser):
@@ -33,17 +38,18 @@ class CCppParser(LanguageParser):
 
     def parse(self, sf) -> ParseOutput:
         root, out, mod = self._prepare(sf)
+        guard_node = self._detect_include_guard(root)
         func_nodes: list[tuple[str, Node]] = []
         chain_to_id: dict[tuple, str] = {(): mod.id}
 
-        # (node, chain, parent_sym_id, in_class)
-        stack = [(root, (), mod.id, False)]
+        # (node, chain, parent_sym_id, in_class, in_conditional)
+        stack = [(root, (), mod.id, False, False)]
         while stack:
-            node, chain, parent_id, in_class = stack.pop()
+            node, chain, parent_id, in_class, in_cond = stack.pop()
             t = node.type
 
             if t == "preproc_include":
-                self._include(node, out)
+                self._include(node, out, in_cond)
                 continue
 
             if t == "namespace_definition":
@@ -51,7 +57,7 @@ class CCppParser(LanguageParser):
                 new_chain = chain + (name,) if name else chain
                 body = node.child_by_field_name("body")
                 if body is not None:
-                    stack.append((body, new_chain, parent_id, False))
+                    stack.append((body, new_chain, parent_id, False, in_cond))
                 continue
 
             if t in _CLASS_TYPES:
@@ -65,7 +71,7 @@ class CCppParser(LanguageParser):
                     self._inherits(node, sym.id, out)
                     body = node.child_by_field_name("body")
                     if body is not None:
-                        stack.append((body, new_chain, sym.id, True))
+                        stack.append((body, new_chain, sym.id, True, in_cond))
                     continue
 
             if t == "function_definition":
@@ -76,14 +82,64 @@ class CCppParser(LanguageParser):
             if t == "call_expression":
                 self._call(node, self._owner(chain, chain_to_id, mod.id), out)
 
+            # Entering a conditional-preprocessor node makes everything
+            # nested inside it "conditional", UNLESS this is the whole-file
+            # include-guard wrapper (its direct content is unconditional;
+            # further nested conditionals inside it still count).
+            child_cond = in_cond
+            if t in _COND_TYPES and node != guard_node:
+                child_cond = True
+
             for c in reversed(node.children):
-                stack.append((c, chain, parent_id, in_class))
+                stack.append((c, chain, parent_id, in_class, child_cond))
 
         for sym_id, node in func_nodes:
             self._defuse(sym_id, node, out)
 
         out.symbols.sort(key=lambda s: (s.span.start_line, s.id))
         return out
+
+    # -- preprocessor conditionals ---------------------------------------
+    def _detect_include_guard(self, root: Node) -> Node | None:
+        """Detect the classic whole-file ``#ifndef GUARD / #define GUARD
+        ... #endif`` include-guard pattern.
+
+        Returns the ``preproc_ifdef`` node acting as the guard, or ``None``.
+        Requirements (kept intentionally narrow -- SPEC scope is detection,
+        not general preprocessor evaluation):
+        - it is the only top-level construct in the file (comments aside),
+          i.e. it spans to the end of the file;
+        - it is written as ``#ifndef`` (not ``#ifdef``/``#if``);
+        - the first statement inside its body is ``#define`` of the exact
+          same identifier used in the ``#ifndef`` condition.
+        """
+        top_items = [c for c in root.children if c.type != "comment"]
+        if len(top_items) != 1:
+            return None
+        guard = top_items[0]
+        if guard.type != "preproc_ifdef":
+            return None
+        if not guard.children or guard.children[0].type != "#ifndef":
+            return None
+        name_node = guard.child_by_field_name("name")
+        if name_node is None:
+            return None
+        guard_name = text_of(name_node)
+        if not guard_name:
+            return None
+        # Body items: everything after the leading "#ifndef" token and the
+        # condition identifier, and before the trailing "#endif" token.
+        body_items = [c for c in guard.children[2:]
+                      if c.type not in ("#endif", "comment")]
+        if not body_items:
+            return None
+        first = body_items[0]
+        if first.type != "preproc_def":
+            return None
+        def_name = first.child_by_field_name("name")
+        if def_name is None or text_of(def_name) != guard_name:
+            return None
+        return guard
 
     # ------------------------------------------------------------------
     def _owner(self, chain, chain_to_id, mod_id):
@@ -165,7 +221,7 @@ class CCppParser(LanguageParser):
                         out.inherits.append(
                             RawInherit(cls_id, text_of(b), b.start_point[0] + 1))
 
-    def _include(self, node: Node, out: ParseOutput) -> None:
+    def _include(self, node: Node, out: ParseOutput, conditional: bool) -> None:
         path = node.child_by_field_name("path")
         if path is None:
             return
@@ -174,10 +230,12 @@ class CCppParser(LanguageParser):
             raw = text_of(path).strip()
             if raw.startswith("<") and raw.endswith(">"):
                 raw = raw[1:-1]
-            out.raw_imports.append(RawImport(raw, line, "include", angle=True))
+            out.raw_imports.append(RawImport(raw, line, "include", angle=True,
+                                             conditional=conditional))
         else:  # string_literal
             raw = text_of(path).strip().strip('"')
-            out.raw_imports.append(RawImport(raw, line, "include", angle=False))
+            out.raw_imports.append(RawImport(raw, line, "include", angle=False,
+                                             conditional=conditional))
 
     def _call(self, node: Node, owner: str, out: ParseOutput) -> None:
         fn = node.child_by_field_name("function")

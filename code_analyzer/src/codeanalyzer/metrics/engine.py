@@ -26,6 +26,16 @@ must match exactly, see report/template/report_template.html):
     metrics["cycles"] = [[file_id, ...], ...]   # reuses the pipeline's SCCs
     metrics["definitions"] = {metric_name: "short formula/definition"}
     metrics["test_files"] = [file_id, ...]      # sorted list (JSON-safe)
+    metrics["resolution"] = {                   # v1.6: call/import resolution
+        "calls": {total, certain, inferred, unresolved, ambiguous,
+                  certain_pct, ambiguous_pct, "non_test": {same counters,
+                  restricted to edges whose SRC symbol's file is not a test
+                  file}},
+        "imports": {total, certain, unresolved, external, conditional},
+        "by_language": {lang: {calls_total, calls_certain_pct,
+                                calls_ambiguous_pct}},
+        "note": "one-line honest description of what the numbers mean",
+    }                                            # see core/model.py v1.6 contract
 
 Design decisions / limitations (also surfaced via metrics["definitions"]
 and duplicated here for maintainers):
@@ -70,13 +80,27 @@ and duplicated here for maintainers):
 * Cross-language absolute comparison of these metrics is unreliable
   (different languages have very different token/line density); the
   report is expected to note this (SPEC F5).
+* v1.6 resolution quality (metrics["resolution"]): the "calls" family
+  covers CALL/INHERIT/TYPE_REF edges (symbol -> symbol references), counted
+  by ``Edge.confidence`` (certain/inferred/unresolved) plus a separate
+  ``ambiguous`` tally from ``Edge.ambiguous`` (a same-name candidate set
+  with more than one member -- see resolvers/symbols.py). ``non_test``
+  repeats the same counters restricted to edges whose *source* symbol's
+  file is not a test file (FileInfo.is_test), resolved from the symbol id
+  by taking the substring before the first "::" -- symbol ids are always
+  "<file path>::...", so this is exact, not a heuristic. "imports" counts
+  IMPORT edges by destination marker (``unresolved:``/``external:`` prefix)
+  and by ``Edge.conditional`` (C/C++ #include inside a preprocessor
+  conditional). "by_language" repeats the calls totals/percentages per
+  source file language, for every language present in the project (0 calls
+  is a valid, shown value, not omitted).
 """
 from __future__ import annotations
 
 import math
 from typing import Any
 
-from codeanalyzer.core.model import AnalysisResult, Language, SymbolKind
+from codeanalyzer.core.model import AnalysisResult, Confidence, EdgeKind, Language, SymbolKind
 from codeanalyzer.metrics.network import compute_network_metrics
 from codeanalyzer.parsers.base import get_parser, text_of
 
@@ -415,6 +439,96 @@ def _mi(cc_total: int, loc_code: int, hv: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# v1.6 resolution-quality metrics (metrics["resolution"], see core/model.py
+# "v1.6 additions" contract).
+# ---------------------------------------------------------------------------
+
+#: calls-family edge kinds per the v1.6 contract: symbol -> symbol references.
+_CALLS_FAMILY_KINDS = frozenset(
+    {EdgeKind.CALL.value, EdgeKind.INHERIT.value, EdgeKind.TYPE_REF.value})
+
+_RESOLUTION_NOTE = (
+    "呼び出し解決の品質指標．certainは構文的に一意，ambiguousは同名候補が複数"
+    "あることを示す（テストコード除外値はnon_test）．"
+)
+
+
+def _src_file_id(edge_src: str) -> str:
+    """Resolve an Edge.src (symbol id "<file path>::...") to its file id."""
+    return edge_src.split("::", 1)[0]
+
+
+def _pct(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator * 100, 1) if denominator else 0.0
+
+
+def _confidence_counts(edges: list) -> dict[str, Any]:
+    """{total, certain, inferred, unresolved, ambiguous, certain_pct,
+    ambiguous_pct} for a list of edges, per the v1.6 "calls" shape."""
+    total = len(edges)
+    certain = sum(1 for e in edges if e.confidence == Confidence.CERTAIN.value)
+    inferred = sum(1 for e in edges if e.confidence == Confidence.INFERRED.value)
+    unresolved = sum(1 for e in edges if e.confidence == Confidence.UNRESOLVED.value)
+    ambiguous = sum(1 for e in edges if e.ambiguous)
+    return {
+        "total": total,
+        "certain": certain,
+        "inferred": inferred,
+        "unresolved": unresolved,
+        "ambiguous": ambiguous,
+        "certain_pct": _pct(certain, total),
+        "ambiguous_pct": _pct(ambiguous, total),
+    }
+
+
+def compute_resolution_metrics(result: AnalysisResult) -> dict[str, Any]:
+    """Build ``metrics["resolution"]`` (v1.6 contract, core/model.py)."""
+    file_is_test: dict[str, bool] = {f.id: f.is_test for f in result.files}
+    file_language: dict[str, str] = {f.id: f.language for f in result.files}
+    languages_present = sorted({f.language for f in result.files})
+
+    call_edges = [e for e in result.edges if e.kind in _CALLS_FAMILY_KINDS]
+
+    calls = _confidence_counts(call_edges)
+    non_test_edges = [
+        e for e in call_edges
+        if not file_is_test.get(_src_file_id(e.src), False)
+    ]
+    calls["non_test"] = _confidence_counts(non_test_edges)
+
+    import_edges = [e for e in result.edges if e.kind == EdgeKind.IMPORT.value]
+    imports = {
+        "total": len(import_edges),
+        "certain": sum(1 for e in import_edges
+                       if not e.dst.startswith("unresolved:")
+                       and not e.dst.startswith("external:")),
+        "unresolved": sum(1 for e in import_edges
+                          if e.dst.startswith("unresolved:")),
+        "external": sum(1 for e in import_edges
+                        if e.dst.startswith("external:")),
+        "conditional": sum(1 for e in import_edges if e.conditional),
+    }
+
+    by_language: dict[str, dict[str, Any]] = {}
+    for lang in languages_present:
+        lang_edges = [e for e in call_edges
+                      if file_language.get(_src_file_id(e.src)) == lang]
+        counts = _confidence_counts(lang_edges)
+        by_language[lang] = {
+            "calls_total": counts["total"],
+            "calls_certain_pct": counts["certain_pct"],
+            "calls_ambiguous_pct": counts["ambiguous_pct"],
+        }
+
+    return {
+        "calls": calls,
+        "imports": imports,
+        "by_language": by_language,
+        "note": _RESOLUTION_NOTE,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -639,6 +753,35 @@ def compute_metrics(result: AnalysisResult, sources: dict[str, str]) -> None:
                    "nodes < 2.",
     })
 
+    # -- v1.6 resolution-quality metrics ------------------------------------
+    resolution = compute_resolution_metrics(result)
+
+    definitions.update({
+        "resolution_calls": "Resolution quality of CALL/INHERIT/TYPE_REF "
+                            "edges, counted by Edge.confidence (certain: "
+                            "syntactically unique match; inferred: "
+                            "name-based best-effort; unresolved: no target "
+                            "found), plus a separate 'ambiguous' tally "
+                            "(Edge.ambiguous -- same-name candidate set with "
+                            "more than one member). certain_pct/ambiguous_pct "
+                            "are percentages of total, 1 decimal place.",
+        "resolution_calls_non_test": "Same counters as resolution.calls, "
+                                     "restricted to edges whose source "
+                                     "symbol's file has FileInfo.is_test == "
+                                     "False -- the honest resolution-quality "
+                                     "number for production (non-test) code.",
+        "resolution_imports": "IMPORT edge resolution: certain (resolved to "
+                              "an internal project file), unresolved (dst "
+                              "starts with 'unresolved:'), external (dst "
+                              "starts with 'external:'), conditional (count "
+                              "of edges with Edge.conditional == True, i.e. "
+                              "C/C++ #include inside a preprocessor "
+                              "conditional block).",
+        "resolution_by_language": "resolution.calls totals/percentages "
+                                  "broken out per source file language, for "
+                                  "every language present in the project.",
+    })
+
     result.metrics["files"] = files_metrics
     result.metrics["symbols"] = symbols_metrics
     result.metrics["project"] = project
@@ -646,3 +789,4 @@ def compute_metrics(result: AnalysisResult, sources: dict[str, str]) -> None:
     result.metrics["definitions"] = definitions
     result.metrics["test_files"] = test_ids
     result.metrics["network"] = network_summary
+    result.metrics["resolution"] = resolution

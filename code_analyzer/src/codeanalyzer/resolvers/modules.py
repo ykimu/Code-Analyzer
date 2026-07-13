@@ -178,6 +178,7 @@ class ModuleResolver:
                                     if dst.startswith("unresolved:")
                                     else Confidence.CERTAIN.value),
                         line=imp.line,
+                        conditional=imp.conditional,
                     )
                     k = edge.key()
                     if k in seen:

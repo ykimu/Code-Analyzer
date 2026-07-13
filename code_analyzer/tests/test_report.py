@@ -304,7 +304,7 @@ def test_json_writer_round_trips(tmp_path, sample_result):
     assert out_path.read_text(encoding="utf-8") == out_path2.read_text(encoding="utf-8")
 
     # Basic schema sanity.
-    assert loaded["schema_version"] == SCHEMA_VERSION == "1.2"
+    assert loaded["schema_version"] == SCHEMA_VERSION == "1.3"
     assert len(loaded["files"]) == 6
     assert loaded["impact"] is None
     # include_defuse=False by default -> no "defuses" key.
@@ -677,6 +677,45 @@ def test_template_has_no_em_or_en_dash():
     assert "–" not in text  # en dash
 
 
+# ---------------------------------------------------------------------------
+# DATA-VIS: 影響伝播ダイアグラム (impact propagation diagram) replacing the
+# old whole-project force-layout mini graph on the impact tab.
+# ---------------------------------------------------------------------------
+def test_template_has_propagation_diagram():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # the old force-layout mini graph must be fully gone
+    assert "renderMiniGraph" not in text
+    assert "impact-mini-graph" not in text
+    # new renderer + per-namespace setup/update hooks
+    assert "function renderPropagationDiagram(" in text
+    assert "function buildPropagationModel(" in text
+    assert "setupPropagationDiagram" in text
+    assert "updatePropagationDiagram" in text
+    assert "影響伝播ダイアグラム" in text
+    # layered columns: hop column headers + origin column label
+    assert "'ホップ ' + c" in text
+    assert "'起点'" in text
+    # svg aria summary
+    assert "影響伝播: 起点" in text
+    # traceImpact records the propagation parent per affected entry
+    assert "parent_file" in text
+
+
+def test_template_propagation_legend_and_overflow():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # legend chips + via line-style samples
+    assert "prop-legend" in text
+    assert "確実" in text
+    assert "推定" in text
+    assert "呼び出し" in text
+    assert "インポート" in text
+    assert "データフロー" in text
+    # per-column overflow group node (+N ファイル) and collapse affordance
+    assert "' ファイル'" in text
+    assert "折りたたむ" in text
+    assert "PROP_MAX_PER_COL" in text
+
+
 def test_build_html_metrics_and_impact_features_survive_real_build(tmp_path, sample_result_with_sources):
     """End-to-end smoke test: a real build_html() output still contains all
     the new markers above, i.e. nothing in html_builder.py strips/escapes
@@ -689,3 +728,97 @@ def test_build_html_metrics_and_impact_features_survive_real_build(tmp_path, sam
     assert 'id="impact-file-combo"' in html
     assert "function tokenizeLine(" in html
     assert "結果をCSVダウンロード" in html
+
+
+# ---------------------------------------------------------------------------
+# RESOLUTION-METRICS (v1.6): 概要タブの 解決品質 panel + dependency-graph
+# conditional-include edge rendering (metrics["resolution"], Edge.conditional).
+# ---------------------------------------------------------------------------
+
+def test_template_has_resolution_panel_markup():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # panel + its building blocks, on the overview tab (below 言語別内訳).
+    assert 'id="resolution-panel"' in text
+    assert 'id="resolution-cards"' in text
+    assert 'id="resolution-bar"' in text
+    assert 'aria-hidden="true"' in text  # the stacked bar is decorative
+    assert 'id="resolution-bar-legend"' in text
+    assert 'id="resolution-lang-table"' in text
+    assert 'id="resolution-note"' in text
+    assert "解決品質" in text
+    # stacked-bar container + its three segment classes (pure CSS divs).
+    assert ".resbar{" in text
+    assert "resbar-seg" in text
+    assert "seg-certain" in text
+    assert "seg-inferred" in text
+    assert "seg-unresolved" in text
+    # cards per the SPEC.
+    assert "呼び出し解決率（確実）" in text
+    assert "曖昧率" in text
+    assert "実装コードのみの曖昧率" in text
+    assert "未解決インポート" in text
+    assert "条件付きインクルード" in text
+    # renderer + graceful-degradation hook.
+    assert "function renderResolutionPanel(" in text
+    assert "DATA.metrics && DATA.metrics.resolution" in text
+    assert "resolution-panel" in text and "classList.add('hidden')" in text
+
+
+def test_template_has_conditional_edge_rendering():
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+    # distinct dash pattern for conditional-include edges, declared after
+    # (and thus overriding) the generic .link-dashed rule.
+    assert "line.link-conditional{stroke-dasharray:2,6;}" in text
+    assert "link-conditional" in text
+    assert "d.conditional" in text
+    # tooltip suffix + legend entry, shown only when a conditional edge exists.
+    assert "（条件付きコンパイル）" in text
+    assert "function appendConditionalLegend(" in text
+    assert "IMPORT_EDGES.some(function (e) { return !!e.conditional; })" in text
+    assert "条件付き（プリプロセッサ条件内のインクルード）" in text
+
+
+def test_resolution_section_present_when_metrics_resolution_data(tmp_path, sample_result):
+    sample_result.metrics["resolution"] = {
+        "calls": {
+            "total": 10, "certain": 6, "inferred": 3, "unresolved": 1,
+            "ambiguous": 2, "certain_pct": 60.0, "ambiguous_pct": 20.0,
+            "non_test": {
+                "total": 8, "certain": 5, "inferred": 2, "unresolved": 1,
+                "ambiguous": 1, "certain_pct": 62.5, "ambiguous_pct": 12.5,
+            },
+        },
+        "imports": {"total": 6, "certain": 4, "unresolved": 1, "external": 1,
+                    "conditional": 1},
+        "by_language": {
+            "python": {"calls_total": 7, "calls_certain_pct": 57.1,
+                       "calls_ambiguous_pct": 28.6},
+            "javascript": {"calls_total": 3, "calls_certain_pct": 66.7,
+                          "calls_ambiguous_pct": 0.0},
+        },
+        "note": "呼び出し解決の品質指標．certainは構文的に一意，ambiguousは"
+               "同名候補が複数あることを示す（テストコード除外値はnon_test）．",
+    }
+    out_path = tmp_path / "report_with_resolution.html"
+    build_html(sample_result, out_path)
+    decoded = _decode_payload(out_path.read_text(encoding="utf-8"))
+    res = decoded["metrics"]["resolution"]
+    assert res["calls"]["certain_pct"] == 60.0
+    assert res["calls"]["non_test"]["ambiguous_pct"] == 12.5
+    assert res["imports"]["conditional"] == 1
+    assert set(res["by_language"].keys()) == {"python", "javascript"}
+    assert res["note"]
+
+
+def test_resolution_section_gracefully_absent_without_resolution_data(tmp_path, sample_result):
+    # build_sample_result() does not populate metrics["resolution"] -- the
+    # panel markup must still exist in the shipped HTML (hidden client-side
+    # by renderResolutionPanel(), not omitted server-side).
+    assert "resolution" not in sample_result.metrics
+    out_path = tmp_path / "report_no_resolution.html"
+    build_html(sample_result, out_path)
+    html = out_path.read_text(encoding="utf-8")
+    assert "__CA_DATA_B64_GZIP__" not in html
+    assert 'id="resolution-panel"' in html
+    decoded = _decode_payload(html)
+    assert "resolution" not in decoded["metrics"]

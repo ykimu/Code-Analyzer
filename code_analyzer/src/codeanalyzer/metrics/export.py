@@ -3,17 +3,26 @@
 ``export_metrics(result, fmt)`` renders the per-file metrics table (core
 LOC/CC/MI/fan metrics plus the v1.1 network metrics), the project summary
 (``metrics["project"]`` flattened with ``metrics["network"]`` under a
-``network_*`` prefix), and the import cycles, in one of three formats:
+``network_*`` prefix), the import cycles, and (v1.6) the project-level call/
+import resolution-quality section (``metrics["resolution"]``), in one of
+three formats:
 
 * ``"csv"``  -- RFC4180 (via the stdlib ``csv`` module: CRLF line endings,
   quoting only where needed). Three sections in one file: the per-file
   table, a blank line, then a ``# project summary`` section (key,value
   rows), then a ``# cycles`` section (index, files joined by ``" -> "``).
+  Unchanged by v1.6: resolution metrics are project-level only (no
+  per-file breakdown), so they are intentionally NOT added here.
 * ``"md"``   -- the same three sections as GitHub-flavored Markdown tables
   (cycles rendered as a bullet list, since each cycle is a single
-  variable-length item rather than tabular data).
-* ``"json"`` -- ``{"project", "network", "files", "cycles"}``, files sorted
-  by path, ``ensure_ascii=False``, 2-space indent.
+  variable-length item rather than tabular data), plus a ``## Resolution``
+  key/value table (nested dicts JSON-encoded, one row per top-level
+  ``metrics["resolution"]`` key) when resolution data is present.
+* ``"json"`` -- ``{"project", "network", "resolution", "files", "cycles"}``,
+  files sorted by path, ``ensure_ascii=False``, 2-space indent.
+  ``"resolution"`` is ``null`` when ``metrics["resolution"]`` is absent
+  (e.g. an older/partial result), same missing-key convention as the rest
+  of this module.
 
 Design decision: a file/symbol metrics entry may be missing a key (e.g. a
 caller ran an older ``compute_metrics`` without network metrics, or is
@@ -92,6 +101,21 @@ def _cycles(result: AnalysisResult) -> list[list[str]]:
     return result.metrics.get("cycles", []) or []
 
 
+def _resolution_pairs(result: AnalysisResult) -> list[tuple[str, Any]]:
+    """Flattened (key, value) pairs from ``metrics["resolution"]``
+    (v1.6, project-level only). Nested dict values (``calls``, ``imports``,
+    ``by_language``) are JSON-encoded; sorted by key for determinism.
+    Empty when ``metrics["resolution"]`` is absent."""
+    resolution = result.metrics.get("resolution") or {}
+    pairs: list[tuple[str, Any]] = []
+    for k in sorted(resolution.keys()):
+        v = resolution[k]
+        if isinstance(v, dict):
+            v = json.dumps(v, sort_keys=True, ensure_ascii=False)
+        pairs.append((k, v))
+    return pairs
+
+
 # ---------------------------------------------------------------------------
 # CSV
 # ---------------------------------------------------------------------------
@@ -154,9 +178,17 @@ def _render_md(result: AnalysisResult) -> str:
     else:
         cycles_lines = "_(no cycles)_"
 
+    resolution_pairs = _resolution_pairs(result)
+    resolution_section = ""
+    if resolution_pairs:
+        resolution_table = _md_table(["key", "value"],
+                                     [[k, v] for k, v in resolution_pairs])
+        resolution_section = "## Resolution\n\n" + resolution_table + "\n\n"
+
     return (
         "## Files\n\n" + files_table + "\n\n"
         "## Project Summary\n\n" + summary_table + "\n\n"
+        + resolution_section +
         "## Cycles\n\n" + cycles_lines + "\n"
     )
 
@@ -170,6 +202,7 @@ def _render_json(result: AnalysisResult) -> str:
     payload = {
         "project": result.metrics.get("project"),
         "network": result.metrics.get("network"),
+        "resolution": result.metrics.get("resolution"),
         "files": _file_rows(result),
         "cycles": _cycles(result),
     }

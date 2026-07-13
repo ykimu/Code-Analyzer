@@ -127,6 +127,10 @@ class RawImport:
     is_wildcard: bool = False      # Java/Python * import
     # (imported_name, local_name) pairs used to build call-resolution bindings.
     names: list[tuple[str, str]] = field(default_factory=list)
+    # v1.6: True when a C/C++ #include sits inside a preprocessor conditional
+    # region (#if/#ifdef/#ifndef/#elif/#else), excluding the common top-level
+    # include-guard wrapper. Unused (stays False) for non-C/C++ imports.
+    conditional: bool = False
 
 
 @dataclass
@@ -145,6 +149,37 @@ class RawInherit:
 
 
 @dataclass
+class RawVarType:
+    """Raw, project-agnostic type facts for one variable/attribute in a scope.
+
+    The parser records *names as written* (last dotted component); the resolver
+    interprets them against the set of known project classes.  ``annos`` come
+    from type annotations, ``ctors`` from ``x = Name(...)`` right-hand sides
+    (the callee name), and ``other`` flags an assignment to anything that is not
+    a simple call (which poisons constructor-based inference for that name).
+    """
+    annos: set[str] = field(default_factory=set)
+    ctors: set[str] = field(default_factory=set)
+    other: bool = False
+
+
+@dataclass
+class TypeHints:
+    """Per-file lightweight symbol table consumed by type-aware resolution.
+
+    * ``scope_vars``: scope symbol id -> {var name -> RawVarType} for function
+      and module scopes (annotations + constructor assignments).
+    * ``class_attrs``: class symbol id -> {attr name -> RawVarType} for
+      ``self.attr`` annotations/constructor assignments.
+    * ``returns``: function name -> set of return-annotation type names
+      (module-local; used for ``g().method()`` and ``x = g()`` inference).
+    """
+    scope_vars: dict[str, dict[str, RawVarType]] = field(default_factory=dict)
+    class_attrs: dict[str, dict[str, RawVarType]] = field(default_factory=dict)
+    returns: dict[str, set[str]] = field(default_factory=dict)
+
+
+@dataclass
 class ParseOutput:
     file_id: str
     symbols: list[Symbol] = field(default_factory=list)
@@ -152,6 +187,7 @@ class ParseOutput:
     calls: list[RawCall] = field(default_factory=list)
     inherits: list[RawInherit] = field(default_factory=list)
     defuses: list[DefUse] = field(default_factory=list)
+    type_hints: TypeHints = field(default_factory=TypeHints)
     parse_ok: bool = True
     parse_partial: bool = False
 

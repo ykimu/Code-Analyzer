@@ -57,7 +57,7 @@ def test_analyze_happy_path(tmp_path):
     assert html_path.exists()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["schema_version"] == "1.2"
+    assert data["schema_version"] == "1.3"
     assert len(data["metrics"]["files"]) > 0
     assert data["meta"]["generated_at"]  # ISO timestamp injected by the CLI
 
@@ -644,7 +644,7 @@ def test_version(capsys):
     assert exc_info.value.code == 0
     out = capsys.readouterr().out
     assert TOOL_VERSION in out
-    assert TOOL_VERSION == "1.5.0"
+    assert TOOL_VERSION == "1.6.0"
 
 
 def test_no_command_prints_help_exit_2(capsys):

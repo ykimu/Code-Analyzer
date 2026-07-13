@@ -1,6 +1,8 @@
 """Python parser."""
 from __future__ import annotations
 
+import re
+
 from tree_sitter import Node
 
 from codeanalyzer.core.model import Symbol, SymbolKind
@@ -11,11 +13,22 @@ from codeanalyzer.parsers.base import (
     RawCall,
     RawImport,
     RawInherit,
+    RawVarType,
     span_of,
     text_of,
 )
 
 _DEF_TYPES = {"function_definition", "class_definition"}
+
+# Typing wrappers whose subscript arguments *are* the underlying type
+# (Optional[T], Union[A, B], Final[T], ...). Container generics such as
+# List[T]/Dict[..] are intentionally NOT unwrapped: the annotated variable is
+# the container, not the element, so narrowing on the element would be wrong.
+_TYPE_UNWRAP = {
+    "Optional", "Union", "Final", "ClassVar", "Annotated",
+}
+_IDENT_TXT_RE = re.compile(r"^[A-Za-z_][\w.]*$")
+_GENERIC_RE = re.compile(r"^([A-Za-z_][\w.]*)\s*\[(.*)\]$", re.DOTALL)
 
 
 class PythonParser(LanguageParser):
@@ -25,10 +38,11 @@ class PythonParser(LanguageParser):
         root, out, mod = self._prepare(sf)
         func_nodes: list[tuple[str, Node]] = []
 
-        # (node, name_chain, parent_sym_id, call_owner, parent_is_class)
-        stack = [(root, (), mod.id, mod.id, False)]
+        # (node, name_chain, parent_sym_id, call_owner, parent_is_class,
+        #  enclosing_class_id)
+        stack = [(root, (), mod.id, mod.id, False, None)]
         while stack:
-            node, chain, parent_id, owner, in_class = stack.pop()
+            node, chain, parent_id, owner, in_class, class_id = stack.pop()
             t = node.type
 
             if t == "function_definition":
@@ -39,9 +53,11 @@ class PythonParser(LanguageParser):
                                  parent_id, self._signature(node, name))
                 out.symbols.append(sym)
                 func_nodes.append((sym.id, node))
+                self._func_hints(node, sym.id, name, out)
                 body = node.child_by_field_name("body")
                 if body is not None:
-                    stack.append((body, new_chain, sym.id, sym.id, False))
+                    stack.append((body, new_chain, sym.id, sym.id, False,
+                                  class_id))
                 continue
 
             if t == "class_definition":
@@ -54,7 +70,8 @@ class PythonParser(LanguageParser):
                 self._inherits(node, sym.id, out)
                 body = node.child_by_field_name("body")
                 if body is not None:
-                    stack.append((body, new_chain, sym.id, owner, True))
+                    stack.append((body, new_chain, sym.id, owner, True,
+                                  sym.id))
                 continue
 
             if t in ("import_statement", "import_from_statement"):
@@ -63,9 +80,11 @@ class PythonParser(LanguageParser):
 
             if t == "call":
                 self._call(node, owner, out)
+            elif t == "assignment":
+                self._assign_hints(node, owner, class_id, out)
 
             for c in reversed(node.children):
-                stack.append((c, chain, parent_id, owner, in_class))
+                stack.append((c, chain, parent_id, owner, in_class, class_id))
 
         for sym_id, node in func_nodes:
             self._defuse(sym_id, node, out)
@@ -152,6 +171,84 @@ class PythonParser(LanguageParser):
             attr = fn.child_by_field_name("attribute")
             obj = fn.child_by_field_name("object")
             out.calls.append(RawCall(owner, text_of(attr), text_of(obj), line))
+
+    # -- type hints (v1.6 type-aware resolution) -------------------------
+    def _func_hints(self, func: Node, sym_id: str, name: str,
+                    out: ParseOutput) -> None:
+        """Record parameter annotations and the return annotation."""
+        th = out.type_hints
+        params = func.child_by_field_name("parameters")
+        if params is not None:
+            for c in params.children:
+                if c.type not in ("typed_parameter", "typed_default_parameter"):
+                    continue
+                pname = self._param_name(c)
+                names = self._type_names(c.child_by_field_name("type"))
+                if pname and names:
+                    slot = th.scope_vars.setdefault(sym_id, {}).setdefault(
+                        pname, RawVarType())
+                    slot.annos |= names
+        ret = func.child_by_field_name("return_type")
+        if ret is not None:
+            names = self._type_names(ret)
+            if names:
+                th.returns.setdefault(name, set()).update(names)
+
+    def _assign_hints(self, node: Node, owner: str, class_id,
+                      out: ParseOutput) -> None:
+        """Record variable annotations and constructor assignments.
+
+        Simple ``name`` targets bind in the current scope (``owner``);
+        ``self.attr`` / ``cls.attr`` targets bind on the enclosing class.
+        """
+        th = out.type_hints
+        left = node.child_by_field_name("left")
+        if left is None:
+            return
+        # resolve target slot
+        slot = None
+        if left.type == "identifier":
+            slot = th.scope_vars.setdefault(owner, {}).setdefault(
+                text_of(left), RawVarType())
+        elif left.type == "attribute":
+            obj = left.child_by_field_name("object")
+            attr = left.child_by_field_name("attribute")
+            if (class_id is not None and obj is not None and attr is not None
+                    and obj.type == "identifier"
+                    and text_of(obj) in ("self", "cls")):
+                slot = th.class_attrs.setdefault(class_id, {}).setdefault(
+                    text_of(attr), RawVarType())
+        if slot is None:
+            return
+        # annotation
+        type_node = node.child_by_field_name("type")
+        if type_node is not None:
+            slot.annos |= self._type_names(type_node)
+        # right-hand side: constructor call vs. other
+        right = node.child_by_field_name("right")
+        if right is not None:
+            self._record_rhs(right, slot)
+
+    def _record_rhs(self, right: Node, slot: RawVarType) -> None:
+        if right.type == "call":
+            fn = right.child_by_field_name("function")
+            if fn is not None and fn.type in ("identifier", "attribute"):
+                # last dotted component names the constructor/factory
+                slot.ctors.add(text_of(fn).split(".")[-1])
+                return
+        # anything else assigned to this name poisons ctor-based inference
+        slot.other = True
+
+    def _type_names(self, type_node) -> set[str]:
+        """Extract candidate class NAMES from an annotation node.
+
+        Handles ``Foo``, ``pkg.Foo`` (last component), ``"Foo"`` string forms,
+        and ``Optional[Foo]``/``Union[A, B]`` wrappers. Returns names as
+        written; the resolver keeps only those naming a known project class.
+        """
+        if type_node is None:
+            return set()
+        return _parse_type_text(text_of(type_node))
 
     # -- def/use ---------------------------------------------------------
     def _defuse(self, sym_id: str, func: Node, out: ParseOutput) -> None:
@@ -256,3 +353,54 @@ class PythonParser(LanguageParser):
             else:
                 stack.extend(n.children)
         return out
+
+
+def _split_top(text: str) -> list[str]:
+    """Split ``text`` on top-level commas (ignoring commas inside brackets)."""
+    parts: list[str] = []
+    depth = 0
+    cur = []
+    for ch in text:
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if cur:
+        parts.append("".join(cur))
+    return parts
+
+
+def _parse_type_text(txt: str) -> set[str]:
+    """Conservatively extract class names from annotation text.
+
+    ``Foo`` -> {Foo}; ``pkg.Foo`` -> {Foo}; ``"Foo"`` -> {Foo};
+    ``Optional[Foo]`` -> {Foo}; ``Union[A, B]`` -> {A, B}; container generics
+    (``List[Foo]`` etc.) and anything unrecognised -> empty (skip narrowing).
+    """
+    txt = txt.strip()
+    if not txt:
+        return set()
+    # string annotation form: strip one layer of quotes and recurse
+    if txt[0] in "\"'":
+        return _parse_type_text(txt.strip("\"'").strip())
+    m = _GENERIC_RE.match(txt)
+    if m:
+        outer = m.group(1).split(".")[-1]
+        if outer in _TYPE_UNWRAP:
+            names: set[str] = set()
+            for part in _split_top(m.group(2)):
+                names |= _parse_type_text(part)
+            return names
+        # unknown / container generic: do not narrow
+        return set()
+    if _IDENT_TXT_RE.match(txt):
+        last = txt.split(".")[-1]
+        if last in ("None", "Any"):
+            return set()
+        return {last}
+    return set()

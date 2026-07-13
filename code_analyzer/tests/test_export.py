@@ -151,13 +151,62 @@ def test_md_no_cycles_placeholder():
 def test_json_round_trips(metrics_result):
     text = export_metrics(metrics_result, "json")
     data = json.loads(text)
-    assert set(data.keys()) == {"project", "network", "files", "cycles"}
+    assert set(data.keys()) == {"project", "network", "resolution", "files", "cycles"}
     assert data["network"]["nodes"] == 5
     assert len(data["files"]) == len(metrics_result.files)
     paths = [f["path"] for f in data["files"]]
     assert paths == sorted(paths)
     for f in data["files"]:
         assert set(f.keys()) == set(FILE_COLUMNS)
+
+
+# ---------------------------------------------------------------------------
+# Resolution (v1.6): project-level only, present in json/md, absent from csv
+# ---------------------------------------------------------------------------
+
+
+def test_json_includes_resolution_section(metrics_result):
+    text = export_metrics(metrics_result, "json")
+    data = json.loads(text)
+    assert data["resolution"] == metrics_result.metrics["resolution"]
+    assert set(data["resolution"].keys()) == {"calls", "imports", "by_language", "note"}
+
+
+def test_json_resolution_null_when_absent():
+    r = AnalysisResult()
+    r.files = [FileInfo(id="a.py", path="a.py", language="python")]
+    r.metrics["files"] = {}
+    r.metrics["project"] = {}
+    r.metrics["network"] = {}
+    r.metrics["cycles"] = []
+    text = export_metrics(r, "json")
+    data = json.loads(text)
+    assert data["resolution"] is None
+
+
+def test_md_includes_resolution_section(metrics_result):
+    text = export_metrics(metrics_result, "md")
+    assert "## Resolution" in text
+    assert "calls" in text
+    assert "imports" in text
+    assert "by_language" in text
+
+
+def test_md_omits_resolution_section_when_absent():
+    r = AnalysisResult()
+    r.files = []
+    r.metrics["files"] = {}
+    r.metrics["project"] = {}
+    r.metrics["network"] = {}
+    r.metrics["cycles"] = []
+    text = export_metrics(r, "md")
+    assert "## Resolution" not in text
+
+
+def test_csv_has_no_resolution_section(metrics_result):
+    # CSV stays file-level only (SPEC: unchanged by v1.6).
+    text = export_metrics(metrics_result, "csv")
+    assert "resolution" not in text.lower()
 
 
 def test_json_missing_metric_keys_are_null():

@@ -117,6 +117,19 @@ button.card.card-link{
 .legend-item{display:inline-flex; align-items:center; gap:5px;}
 .swatch{width:11px; height:11px; border-radius:3px; display:inline-block;}
 .legend-gradient{display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:6px; color:var(--text-muted);}
+
+/* ==== Resolution quality panel (v1.6, 解決品質) ==== */
+.resbar{
+  display:flex; width:100%; height:14px; border-radius:5px; overflow:hidden;
+  border:1px solid var(--border-strong); background:var(--bg); margin-top:6px;
+}
+.resbar-seg{height:100%;}
+.resbar-seg.seg-certain{background:var(--accent);}
+.resbar-seg.seg-inferred{background:var(--warn-text);}
+.resbar-seg.seg-unresolved{background:var(--danger-text);}
+.resbar-swatch.seg-certain{background:var(--accent);}
+.resbar-swatch.seg-inferred{background:var(--warn-text);}
+.resbar-swatch.seg-unresolved{background:var(--danger-text);}
 .gradient-bar{width:160px; height:10px; border-radius:5px; border:1px solid var(--border);}
 .donut-center{font-size:13px; fill:var(--text);}
 .tick text{font-size:12.5px; fill:var(--text-muted);}
@@ -214,6 +227,11 @@ text.dimmed{opacity:0.15;}
 }
 .node-label.label-hidden{display:none;}
 line.link-dashed{stroke-dasharray:4,3;}
+/* v1.6: conditional #include edges (Edge.conditional) get a distinct, sparser
+   dash pattern than the generic unresolved/inferred dash above, so the two
+   are visually distinguishable at a glance. Declared after .link-dashed so
+   equal-specificity cascade lets this win when both classes are present. */
+line.link-conditional{stroke-dasharray:2,6;}
 line.link.dimmed{opacity:0.15;}
 line.link-hit{cursor:default;}
 .pin-ring{fill:none; stroke:var(--text-muted); stroke-width:1.2px; stroke-dasharray:2,3; pointer-events:none;}
@@ -322,6 +340,18 @@ tr.metrics-row:focus-visible{outline:2px solid var(--focus); outline-offset:-2px
 .tok-keyword{color:#1D4ED8;}
 .tok-number{color:#B45309;}
 
+/* ==== Impact tab: 影響伝播ダイアグラム (propagation diagram) ==== */
+.prop-wrap{position:relative; overflow:hidden;}
+.prop-wrap svg{display:block; max-width:100%;}
+.prop-tooltip{
+  position:absolute; pointer-events:none; background:var(--text); color:#fff;
+  padding:5px 8px; border-radius:5px; font-size:12.5px; line-height:1.5; z-index:5; max-width:360px;
+}
+.prop-node:focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
+.prop-node:focus-visible rect{stroke:var(--focus) !important; stroke-width:3px !important;}
+.prop-legend{margin-top:10px;}
+.prop-legend .legend-item svg{margin-right:2px;}
+
 /* ==== Impact tab: result filters / export / per-file details ==== */
 .result-filter-bar{margin-bottom:8px;}
 .affected-file-details{margin:4px 0; border-bottom:1px dashed var(--border-soft); padding-bottom:4px;}
@@ -364,6 +394,18 @@ footer{padding:14px 20px; color:var(--text-muted); font-size:12.5px; text-align:
       <h2>言語別内訳</h2>
       <svg id="lang-donut" width="280" height="280" role="img"></svg>
       <div id="lang-legend" class="legend"></div>
+    </div>
+    <div class="panel hidden" id="resolution-panel">
+      <h2>解決品質</h2>
+      <div class="cards" id="resolution-cards"></div>
+      <h3 id="resolution-bar-heading">呼び出し解決の内訳（certain / inferred / unresolved）</h3>
+      <div class="resbar" id="resolution-bar" aria-hidden="true"></div>
+      <div id="resolution-bar-legend" class="legend" aria-labelledby="resolution-bar-heading"></div>
+      <h3>言語別の解決状況</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="言語別の呼び出し解決状況">
+        <table id="resolution-lang-table" class="data-table"><caption class="visually-hidden">言語別の呼び出し解決状況</caption></table>
+      </div>
+      <p class="muted" id="resolution-note"></p>
     </div>
     <div class="panel">
       <h2>解析メタデータ</h2>
@@ -843,8 +885,83 @@ function renderOverview() {
   });
 
   renderLangDonut(proj.languages || {});
+  renderResolutionPanel();
   renderMetaTable();
   renderDiagTable();
+}
+
+// v1.6: 解決品質 panel -- degrades gracefully (hidden) when
+// metrics.resolution is absent (e.g. an older analysis.json).
+function fmtPct(v) {
+  return (v === undefined || v === null || !isFinite(v)) ? '-' : v.toFixed(1) + '%';
+}
+
+function renderResolutionPanel() {
+  var res = (DATA.metrics && DATA.metrics.resolution) || null;
+  var panel = byId('resolution-panel');
+  if (!res) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+
+  var calls = res.calls || {};
+  var nonTest = calls.non_test || {};
+  var imports = res.imports || {};
+
+  var cards = [
+    { label: '呼び出し解決率（確実）', value: fmtPct(calls.certain_pct) },
+    { label: '曖昧率', value: fmtPct(calls.ambiguous_pct) },
+    { label: '実装コードのみの曖昧率', value: fmtPct(nonTest.ambiguous_pct) },
+    { label: '未解決インポート', value: fmt(imports.unresolved) }
+  ];
+  if ((imports.conditional || 0) > 0) {
+    cards.push({ label: '条件付きインクルード', value: fmt(imports.conditional) });
+  }
+  byId('resolution-cards').innerHTML = cards.map(function (c) {
+    return '<div class="card"><div class="card-value">' + escapeHtml(String(c.value)) +
+      '</div><div class="card-label">' + escapeHtml(c.label) + '</div></div>';
+  }).join('');
+
+  renderResolutionBar(calls);
+  renderResolutionLangTable(res.by_language || {});
+
+  byId('resolution-note').textContent = res.note || '';
+}
+
+function renderResolutionBar(calls) {
+  var total = calls.total || 0;
+  var certain = calls.certain || 0;
+  var inferred = calls.inferred || 0;
+  var unresolved = calls.unresolved || 0;
+  var segs = [
+    { cls: 'seg-certain', label: '確実 (certain)', n: certain },
+    { cls: 'seg-inferred', label: '推定 (inferred)', n: inferred },
+    { cls: 'seg-unresolved', label: '未解決 (unresolved)', n: unresolved }
+  ];
+  byId('resolution-bar').innerHTML = segs.map(function (s) {
+    var pct = total > 0 ? (s.n / total * 100) : 0;
+    return '<div class="resbar-seg ' + s.cls + '" style="width:' + pct.toFixed(1) + '%"></div>';
+  }).join('');
+  // The bar itself is aria-hidden (purely decorative gradient of divs); the
+  // actual counts/percentages are exposed as real text in this legend.
+  byId('resolution-bar-legend').innerHTML = segs.map(function (s) {
+    var pct = total > 0 ? (s.n / total * 100) : 0;
+    return '<span class="legend-item"><span class="swatch resbar-swatch ' + s.cls + '"></span>' +
+      escapeHtml(s.label) + ' ' + fmt(s.n) + ' (' + pct.toFixed(1) + '%)</span>';
+  }).join('') + '<span class="legend-item">合計 ' + fmt(total) + ' 件</span>';
+}
+
+function renderResolutionLangTable(byLanguage) {
+  var langs = Object.keys(byLanguage).sort();
+  var table = byId('resolution-lang-table');
+  var caption = '<caption class="visually-hidden">言語別の呼び出し解決状況</caption>';
+  if (!langs.length) { table.innerHTML = caption + '<tr><td>データがありません。</td></tr>'; return; }
+  var head = '<thead><tr><th scope="col">言語</th><th scope="col">呼び出し数</th>' +
+    '<th scope="col">確実%</th><th scope="col">曖昧%</th></tr></thead>';
+  var body = '<tbody>' + langs.map(function (l) {
+    var e = byLanguage[l] || {};
+    return '<tr><td>' + escapeHtml(LANG_LABELS[l] || l) + '</td><td>' + fmt(e.calls_total) +
+      '</td><td>' + fmtPct(e.calls_certain_pct) + '</td><td>' + fmtPct(e.calls_ambiguous_pct) + '</td></tr>';
+  }).join('') + '</tbody>';
+  table.innerHTML = caption + head + body;
 }
 
 // Cross-tab navigation from clickable overview summary cards. Metrics-tab
@@ -969,8 +1086,21 @@ var LINK_COLORS = { 'default': '#b7bdc6', cycle: '#B91C1C', 'in': '#0072B2', 'ou
 function renderGraphTab() {
   populateDirFilter();
   renderLangLegendFor('graph-legend');
+  appendConditionalLegend('graph-legend');
   wireGraphControls();
   buildAndRenderGraph();
+}
+
+// v1.6: only shown when at least one IMPORT edge is Edge.conditional (C/C++
+// #include nested inside a preprocessor #if/#ifdef/#elif/#else block).
+function appendConditionalLegend(elId) {
+  var hasConditional = IMPORT_EDGES.some(function (e) { return !!e.conditional; });
+  if (!hasConditional) return;
+  var el = byId(elId);
+  if (!el) return;
+  el.innerHTML += '<span class="legend-item"><svg width="30" height="10" aria-hidden="true">' +
+    '<line x1="0" y1="5" x2="30" y2="5" stroke="' + LINK_COLORS.default +
+    '" stroke-width="2" stroke-dasharray="2,6"></line></svg>条件付き（プリプロセッサ条件内のインクルード）</span>';
 }
 
 function populateDirFilter() {
@@ -1169,7 +1299,7 @@ function computeGraphData() {
       if (!dstNodeId) return;
     }
     if (srcNodeId === dstNodeId) return;
-    links.push({ source: srcNodeId, target: dstNodeId, confidence: e.confidence, kind: e.kind, line: e.line, rawSrc: e.src, rawDst: e.dst });
+    links.push({ source: srcNodeId, target: dstNodeId, confidence: e.confidence, kind: e.kind, line: e.line, rawSrc: e.src, rawDst: e.dst, conditional: !!e.conditional });
   });
   nodes = nodes.concat(Array.from(extNodeMap.values()));
   return { nodes: nodes, links: links, aggregated: willAggregate };
@@ -1314,7 +1444,10 @@ function buildAndRenderGraph() {
   var sel = graphState.selectedNodeId;
 
   var link = linkLayer.selectAll('line.link').data(links).join('line')
-    .attr('class', function (d) { return 'link' + (d.confidence === 'certain' ? '' : ' link-dashed'); })
+    .attr('class', function (d) {
+      return 'link' + (d.confidence === 'certain' ? '' : ' link-dashed') +
+        (d.conditional ? ' link-conditional' : '');
+    })
     .attr('stroke', function (d) { return linkStrokeColor(d, sel, cycleEdgeKeys); })
     .attr('stroke-width', function (d) { return linkStrokeWidth(d, sel, cycleEdgeKeys); })
     .attr('marker-end', function (d) { return 'url(#' + linkMarkerId(d, sel, cycleEdgeKeys) + ')'; });
@@ -1518,7 +1651,8 @@ function showEdgeTooltip(ev, d) {
   var dstPath = d.rawDst.indexOf('external:') === 0
     ? d.rawDst.slice('external:'.length)
     : ((FILES_BY_ID.get(d.rawDst) || {}).path || d.rawDst);
-  tooltip.textContent = srcPath + ' → ' + dstPath + ' (' + d.kind + ', L' + (d.line || '?') + ')';
+  tooltip.textContent = srcPath + ' → ' + dstPath + ' (' + d.kind + ', L' + (d.line || '?') + ')' +
+    (d.conditional ? '（条件付きコンパイル）' : '');
   tooltip.style.left = (ev.clientX - rect.left + 12) + 'px';
   tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
   tooltip.classList.remove('hidden');
@@ -2587,6 +2721,8 @@ function wireAffectedFilesSection(prefix, affectedFiles, clickable, fullResult, 
     var shownSymbols = filtered.reduce(function (s, af) { return s + af.symbols.length; }, 0);
     var countEl = byId(prefix + '-filter-count');
     if (countEl) countEl.textContent = shownSymbols + ' / ' + totalSymbols + ' 件を表示';
+    // keep the 影響伝播ダイアグラム in sync with the confidence/via filters
+    updatePropagationDiagram(prefix);
     return filtered;
   }
 
@@ -2656,7 +2792,7 @@ function renderPrecomputedImpact(impact) {
         return '<li>' + escapeHtml(b.symbol_id) + ' (L' + b.line + '): ' + escapeHtml(b.reason) + '</li>';
       }).join('') + '</ul></div>';
   }
-  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph"></svg></div>';
+  html += '<div class="panel"><h2>影響伝播ダイアグラム</h2><div id="pc-propagation"></div></div>';
   if (showViewer) {
     html += '<div class="panel"><h2>ソースビューア</h2>' +
       '<div class="toolbar"><span id="impact-pc-viewer-filename" class="muted"></span>' +
@@ -2667,15 +2803,13 @@ function renderPrecomputedImpact(impact) {
       '<div id="impact-pc-viewer" class="source-viewer"></div></div>';
   }
   el.innerHTML = html;
-  var affectedFileIds = new Set((impact.affected_files || []).map(function (a) { return a.file_id; }));
-  if (query.file) affectedFileIds.add(query.file);
-  renderMiniGraph('impact-mini-graph', affectedFileIds);
+  setupPropagationDiagram('pc', 'pc-propagation', 'pc', showViewer, [query.file], impact.affected_files || []);
+  wireAffectedFilesSection('pc', impact.affected_files || [], showViewer, impact, 'pc');
 
   if (showViewer) {
     pcViewer.originFileId = query.file;
     pcViewer.originStart = query.start_line;
     pcViewer.originEnd = query.end_line || query.start_line;
-    wireAffectedFilesSection('pc', impact.affected_files || [], showViewer, impact, 'pc');
     wireJumpToLine('impact-pc-jump-line', 'impact-pc-jump-btn', 'impact-pc-viewer');
     byId('impact-pc-back-btn').addEventListener('click', function () {
       byId('impact-pc-back-btn').classList.add('hidden');
@@ -2956,50 +3090,446 @@ function wireSourceViewerKeyboard(container) {
   });
 }
 
-function renderMiniGraph(svgId, highlightFileIds) {
-  var svg = d3.select('#' + svgId);
-  svg.selectAll('*').remove();
-  var width = 700, height = 420;
-  svg.attr('width', width).attr('height', height).attr('role', 'img');
-  var nodes = DATA.files.map(function (f) {
-    return { id: f.id, path: f.path, language: f.language, loc: getMetric(f.id, 'loc_code', DEFAULT_LOC) };
+/* ==========================================================================
+ * 影響伝播ダイアグラム (impact propagation diagram)
+ *
+ * Replaces the old whole-project force-layout mini graph, which drew all
+ * project files (unlabeled, unstructured, non-deterministically laid out and
+ * frequently outside the clipped 700x420 viewport). This diagram shows ONLY
+ * the origin file(s) + affected files as layered columns left-to-right by
+ * hop (column 0 = 起点), with parent links showing which file's expansion
+ * reached each affected file. Layout is fully deterministic.
+ * ========================================================================== */
+var CONFIDENCE_RANK = { certain: 0, inferred: 1, '要確認': 2 };
+var PROP_NODE_W = 150;
+var PROP_NODE_H = 40;
+var PROP_COL_W = 190;
+var PROP_V_GAP = 12;
+var PROP_HEADER_H = 30;
+var PROP_MAX_PER_COL = 12;
+var PROP_MAX_SVG_H = 640;
+var PROP_INFERRED_COLOR = '#B45309';
+var PROP_DATAFLOW_COLOR = '#CA8A04';
+var PROP_EDGE_COLOR = '#8a8f98';
+
+function confidenceLabelOf(conf) {
+  return conf === 'certain' ? '確実' : conf === 'inferred' ? '推定' : '要確認';
+}
+
+function basenameOf(path) { return String(path).split('/').pop(); }
+
+// Middle-ellipsis so both the start and the (usually more distinctive) end
+// of a long basename stay readable inside the fixed-width node rect.
+function midEllipsize(name, maxChars) {
+  if (name.length <= maxChars) return name;
+  var head = Math.ceil((maxChars - 1) * 0.55);
+  var tail = maxChars - 1 - head;
+  return name.slice(0, head) + '…' + name.slice(name.length - tail);
+}
+
+/* Aggregates affected_files entries into one diagram node per file: minimum
+ * hop, best confidence, parent file (recorded by traceImpact's BFS, or
+ * derived below for precomputed ImpactResult JSON that carries no parent
+ * info), the via kind + line of that parent link, and line/symbol counts
+ * for the tooltip. */
+function buildPropagationModel(originFileIds, affectedFiles) {
+  var nodes = new Map();
+  affectedFiles.forEach(function (af) {
+    var best = null;
+    (af.symbols || []).forEach(function (s) {
+      var hop = (s.hops === undefined || s.hops === null) ? 1 : s.hops;
+      var rank = CONFIDENCE_RANK[s.confidence] !== undefined ? CONFIDENCE_RANK[s.confidence] : 2;
+      if (!best || hop < best.hop || (hop === best.hop && rank < best.rank)) best = { hop: hop, rank: rank, s: s };
+    });
+    if (!best) return;
+    var lines = [];
+    (af.symbols || []).forEach(function (s) { (s.lines || []).forEach(function (l) { if (l) lines.push(l); }); });
+    lines.sort(function (a, b) { return a - b; });
+    nodes.set(af.file_id, {
+      fid: af.file_id, hop: Math.max(1, best.hop),
+      confidence: best.s.confidence,
+      parent: best.s.parent_file || null,
+      via: best.s.via || null,
+      line: (best.s.lines && best.s.lines[0]) || null,
+      symbolCount: (af.symbols || []).length,
+      lines: lines
+    });
   });
-  var nodeIds = new Set(nodes.map(function (n) { return n.id; }));
-  var links = IMPORT_EDGES
-    .filter(function (e) { return nodeIds.has(e.src) && nodeIds.has(e.dst); })
-    .map(function (e) { return { source: e.src, target: e.dst, confidence: e.confidence }; });
-  var r = d3.scaleSqrt().domain([0, d3.max(nodes, function (d) { return d.loc; }) || 1]).range([3, 16]);
-  var container = svg.append('g');
-  svg.call(d3.zoom().scaleExtent([0.2, 6]).on('zoom', function (ev) { container.attr('transform', ev.transform); }));
-  var link = container.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke', '#c7ccd3').attr('stroke-width', 1);
-  var nodeSel = container.append('g').selectAll('circle').data(nodes).join('circle')
-    .attr('r', function (d) { return r(d.loc); })
-    .attr('fill', function (d) { return LANG_COLORS[d.language] || EXTERNAL_COLOR; })
-    .attr('opacity', function (d) { return highlightFileIds.has(d.id) ? 1 : 0.15; })
-    .attr('stroke', function (d) { return highlightFileIds.has(d.id) ? '#B91C1C' : '#fff'; })
-    .attr('stroke-width', function (d) { return highlightFileIds.has(d.id) ? 2 : 1; });
-  nodeSel.append('title').text(function (d) { return d.path; });
-  var reducedMotion = prefersReducedMotion();
-  var sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(function (d) { return d.id; }).distance(50).strength(0.3))
-    .force('charge', d3.forceManyBody().strength(-100))
-    .force('center', d3.forceCenter(width / 2, height / 2));
 
-  function renderPositions() {
-    link.attr('x1', function (d) { return d.source.x; }).attr('y1', function (d) { return d.source.y; })
-        .attr('x2', function (d) { return d.target.x; }).attr('y2', function (d) { return d.target.y; });
-    nodeSel.attr('cx', function (d) { return d.x; }).attr('cy', function (d) { return d.y; });
+  var hopOf = new Map();
+  originFileIds.forEach(function (o) { hopOf.set(o, 0); });
+  nodes.forEach(function (n, fid) { if (!hopOf.has(fid)) hopOf.set(fid, n.hop); });
+
+  // Derive missing parents by edge lookup (precomputed results): an
+  // IMPORT/CALL/INHERIT edge from the file to a file exactly one hop closer
+  // to the origin; fall back to the first origin file.
+  var wanted = new Map();
+  nodes.forEach(function (n) {
+    if (!n.parent || !hopOf.has(n.parent) || hopOf.get(n.parent) !== n.hop - 1) wanted.set(n.fid, n);
+  });
+  if (wanted.size) {
+    IMPORT_EDGES.forEach(function (e) {
+      var n = wanted.get(e.src);
+      if (n && hopOf.get(e.dst) === n.hop - 1) {
+        n.parent = e.dst;
+        if (!n.via) n.via = 'import';
+        if (!n.line) n.line = e.line || null;
+        wanted.delete(e.src);
+      }
+    });
+    CALL_INHERIT_EDGES.forEach(function (e) {
+      var srcSym = SYMBOLS_BY_ID.get(e.src), dstSym = SYMBOLS_BY_ID.get(e.dst);
+      if (!srcSym || !dstSym) return;
+      var n = wanted.get(srcSym.file_id);
+      if (n && hopOf.get(dstSym.file_id) === n.hop - 1) {
+        n.parent = dstSym.file_id;
+        if (!n.via) n.via = e.kind;
+        if (!n.line) n.line = e.line || null;
+        wanted.delete(srcSym.file_id);
+      }
+    });
+    wanted.forEach(function (n) { n.parent = originFileIds[0] || null; });
   }
-  if (reducedMotion) {
-    sim.stop();
-    for (var i = 0; i < 300; i++) sim.tick();
-    renderPositions();
-  } else {
-    sim.on('tick', renderPositions);
+  return nodes;
+}
+
+/* Per-diagram state: one spec per namespace ('pc' | 'sf' | 'fb'), holding
+ * the UNFILTERED affected list (the confidence/via filter state is applied
+ * at render time so the diagram stays in sync with the list filters) and
+ * the set of hop columns the user expanded past the 12-node cap. */
+var PROPAGATION = {};
+
+function setupPropagationDiagram(prefix, containerId, ctx, clickable, originFileIds, affectedFiles) {
+  PROPAGATION[prefix] = {
+    containerId: containerId, ctx: ctx, clickable: clickable,
+    originFileIds: originFileIds.filter(function (f) { return !!f; }),
+    affectedFiles: affectedFiles, expandedCols: new Set()
+  };
+  updatePropagationDiagram(prefix);
+}
+
+function updatePropagationDiagram(prefix) {
+  var spec = PROPAGATION[prefix];
+  if (!spec || !byId(spec.containerId)) return;
+  var state = RESULT_FILTER_STATE[prefix] || defaultResultFilterState();
+  var visibleSet = new Set(filterAffectedFiles(spec.affectedFiles, state).map(function (af) { return af.file_id; }));
+  renderPropagationDiagram(spec, visibleSet, prefix);
+}
+
+function propViaCategory(via) { return viaCategory(via || 'call'); }
+function propEdgeDash(via) {
+  var cat = propViaCategory(via);
+  if (cat === 'import') return '6,4';
+  if (cat === 'dataflow') return '2,3';
+  return null; // call/inherit: solid
+}
+function propEdgeColor(via) {
+  return propViaCategory(via) === 'dataflow' ? PROP_DATAFLOW_COLOR : PROP_EDGE_COLOR;
+}
+
+function renderPropagationDiagram(spec, visibleSet, prefix) {
+  var container = byId(spec.containerId);
+  var model = buildPropagationModel(spec.originFileIds, spec.affectedFiles);
+
+  // Apply the confidence/via filters: drop filtered-out files and re-route
+  // each surviving child's parent pointer up the ancestor chain to the
+  // nearest surviving ancestor (or the origin), so links never dangle.
+  var visible = new Map();
+  model.forEach(function (n, fid) { if (visibleSet.has(fid)) visible.set(fid, n); });
+  function nearestVisibleAncestor(n) {
+    var p = n.parent;
+    var guard = 0;
+    while (p && guard++ < 100) {
+      if (spec.originFileIds.indexOf(p) !== -1 || visible.has(p)) return p;
+      var pn = model.get(p);
+      p = pn ? pn.parent : null;
+    }
+    return spec.originFileIds[0] || null;
   }
 
-  svg.attr('aria-label', '影響範囲グラフ: ' + nodes.length + 'ファイル中 ' + highlightFileIds.size + 'ファイルが影響を受けています');
+  if (!visible.size) {
+    container.innerHTML = '<p class="muted">条件に一致する影響ファイルはありません。</p>';
+    return;
+  }
+
+  // ---- columns: 0 = origin, h = hop h ----
+  var maxHop = 0;
+  visible.forEach(function (n) { if (n.hop > maxHop) maxHop = n.hop; });
+  var cols = [];
+  for (var c = 0; c <= maxHop; c++) cols.push([]);
+  spec.originFileIds.forEach(function (fid) {
+    cols[0].push({ fid: fid, origin: true, hop: 0 });
+  });
+  visible.forEach(function (n) { cols[n.hop].push(n); });
+
+  // ---- vertical order: (confidence certain first, then path), then one
+  // barycenter pass ordering children near their parent's y index ----
+  cols[0].sort(function (a, b) { return a.fid.localeCompare(b.fid); });
+  var renderIndexOf = new Map(); // fid -> index of its rendered node (own or enclosing group) in its column
+  var renderNodeOf = new Map();  // fid -> rendered node object
+  var rendered = [];             // flat list of rendered nodes with x/y
+
+  for (c = 0; c <= maxHop; c++) {
+    var colNodes = cols[c];
+    if (c > 0) {
+      colNodes.sort(function (a, b) {
+        var ra = CONFIDENCE_RANK[a.confidence] !== undefined ? CONFIDENCE_RANK[a.confidence] : 2;
+        var rb = CONFIDENCE_RANK[b.confidence] !== undefined ? CONFIDENCE_RANK[b.confidence] : 2;
+        if (ra !== rb) return ra - rb;
+        return a.fid.localeCompare(b.fid);
+      });
+      // barycenter pass (single parent => barycenter = parent's index)
+      var decorated = colNodes.map(function (n, i) {
+        var p = nearestVisibleAncestor(n);
+        var bi = (p !== null && renderIndexOf.has(p)) ? renderIndexOf.get(p) : 1e9;
+        return { n: n, bi: bi, orig: i };
+      });
+      decorated.sort(function (a, b) { return (a.bi - b.bi) || (a.orig - b.orig); });
+      colNodes = decorated.map(function (d) { return d.n; });
+      cols[c] = colNodes;
+    }
+
+    // ---- overflow: cap at PROP_MAX_PER_COL rendered nodes per column ----
+    var expanded = spec.expandedCols.has(c);
+    var renderList;
+    var groupNode = null;
+    if (colNodes.length > PROP_MAX_PER_COL && !expanded) {
+      renderList = colNodes.slice(0, PROP_MAX_PER_COL - 1);
+      groupNode = { group: true, col: c, count: colNodes.length - (PROP_MAX_PER_COL - 1), members: colNodes.slice(PROP_MAX_PER_COL - 1) };
+    } else {
+      renderList = colNodes.slice();
+      if (colNodes.length > PROP_MAX_PER_COL && expanded) {
+        groupNode = { group: true, collapse: true, col: c, count: colNodes.length - (PROP_MAX_PER_COL - 1), members: [] };
+      }
+    }
+    var x = 12 + c * PROP_COL_W;
+    renderList.forEach(function (n, i) {
+      n.x = x;
+      n.y = PROP_HEADER_H + 8 + i * (PROP_NODE_H + PROP_V_GAP);
+      n.col = c;
+      rendered.push(n);
+      renderIndexOf.set(n.fid, i);
+      renderNodeOf.set(n.fid, n);
+    });
+    if (groupNode) {
+      groupNode.x = x;
+      groupNode.y = PROP_HEADER_H + 8 + renderList.length * (PROP_NODE_H + PROP_V_GAP);
+      rendered.push(groupNode);
+      groupNode.members.forEach(function (m) {
+        renderIndexOf.set(m.fid, renderList.length);
+        renderNodeOf.set(m.fid, groupNode);
+      });
+    }
+  }
+
+  // ---- edges: child -> parent (arrowhead at the parent side: the affected
+  // file DEPENDS ON its parent) ----
+  var edges = [];
+  var seenGroupEdge = new Set();
+  rendered.forEach(function (n) {
+    if (n.origin) return;
+    if (n.group) {
+      // one deduplicated default-style edge per (group, distinct parent)
+      (n.members || []).forEach(function (m) {
+        var p = nearestVisibleAncestor(m);
+        var pr = p !== null ? renderNodeOf.get(p) || findOriginRendered(p) : null;
+        if (!pr) return;
+        var key = n.col + '|' + (pr.fid || 'g' + pr.col);
+        if (seenGroupEdge.has(key)) return;
+        seenGroupEdge.add(key);
+        edges.push({ child: n, parent: pr, via: null, line: null, isGroup: true });
+      });
+      return;
+    }
+    var p = nearestVisibleAncestor(n);
+    if (p === null) return;
+    var pr = renderNodeOf.get(p) || findOriginRendered(p);
+    if (!pr || pr === n) return;
+    edges.push({ child: n, parent: pr, via: n.via, line: n.line, isGroup: false });
+  });
+  function findOriginRendered(fid) {
+    for (var i = 0; i < rendered.length; i++) {
+      if (rendered[i].origin && rendered[i].fid === fid) return rendered[i];
+    }
+    return null;
+  }
+
+  // ---- sizing ----
+  var maxColCount = 0;
+  for (c = 0; c <= maxHop; c++) {
+    var count = Math.min(cols[c].length, spec.expandedCols.has(c) ? cols[c].length + 1 : PROP_MAX_PER_COL);
+    if (cols[c].length > PROP_MAX_PER_COL && spec.expandedCols.has(c)) count = cols[c].length + 1;
+    if (count > maxColCount) maxColCount = count;
+  }
+  var contentW = 24 + (maxHop + 1) * PROP_COL_W;
+  var contentH = PROP_HEADER_H + 16 + maxColCount * (PROP_NODE_H + PROP_V_GAP);
+  var svgW = Math.max(320, container.clientWidth || 700);
+  var svgH = Math.min(contentH, PROP_MAX_SVG_H);
+
+  // ---- DOM skeleton (svg + tooltip + legend) ----
+  container.innerHTML =
+    '<div class="prop-wrap"><svg id="' + spec.containerId + '-svg"></svg>' +
+    '<div class="prop-tooltip hidden" aria-hidden="true"></div></div>' +
+    '<div class="legend prop-legend">' +
+      '<span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>起点</span>' +
+      '<span class="legend-item"><span class="swatch" style="background:#fff;border:2px solid var(--accent)"></span>確実</span>' +
+      '<span class="legend-item"><span class="swatch" style="background:#fff;border:2px solid ' + PROP_INFERRED_COLOR + '"></span>推定</span>' +
+      '<span class="legend-item"><svg width="30" height="10" aria-hidden="true"><line x1="0" y1="5" x2="30" y2="5" stroke="' + PROP_EDGE_COLOR + '" stroke-width="2"></line></svg>呼び出し</span>' +
+      '<span class="legend-item"><svg width="30" height="10" aria-hidden="true"><line x1="0" y1="5" x2="30" y2="5" stroke="' + PROP_EDGE_COLOR + '" stroke-width="2" stroke-dasharray="6,4"></line></svg>インポート</span>' +
+      '<span class="legend-item"><svg width="30" height="10" aria-hidden="true"><line x1="0" y1="5" x2="30" y2="5" stroke="' + PROP_DATAFLOW_COLOR + '" stroke-width="2" stroke-dasharray="2,3"></line></svg>データフロー</span>' +
+    '</div>';
+  var tooltip = container.querySelector('.prop-tooltip');
+  var wrap = container.querySelector('.prop-wrap');
+  var svg = d3.select('#' + spec.containerId + '-svg');
+  var originBase = spec.originFileIds.map(basenameOf).join(', ') || '-';
+  svg.attr('width', svgW).attr('height', svgH)
+    .attr('role', 'group')
+    .attr('aria-label', '影響伝播: 起点' + originBase + ', 影響' + visible.size + 'ファイル, 最大ホップ' + maxHop);
+
+  var defs = svg.append('defs');
+  [['prop-arrow', PROP_EDGE_COLOR], ['prop-arrow-df', PROP_DATAFLOW_COLOR]].forEach(function (m) {
+    defs.append('marker').attr('id', m[0] + '-' + prefix)
+      .attr('viewBox', '0 0 10 10').attr('refX', 9).attr('refY', 5)
+      .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto-start-reverse')
+      .append('path').attr('d', 'M0,0 L10,5 L0,10 z').attr('fill', m[1]);
+  });
+
+  var root = svg.append('g').attr('class', 'prop-root');
+
+  // zoom/pan only when content exceeds the viewport (deterministic default view)
+  if (contentH > PROP_MAX_SVG_H || contentW > svgW) {
+    svg.call(d3.zoom().scaleExtent([0.25, 3]).on('zoom', function (ev) { root.attr('transform', ev.transform); }));
+    svg.style('cursor', 'grab');
+  }
+
+  // column headers
+  var headers = root.append('g').attr('class', 'prop-headers');
+  for (c = 0; c <= maxHop; c++) {
+    headers.append('text')
+      .attr('x', 12 + c * PROP_COL_W + PROP_NODE_W / 2).attr('y', 18)
+      .attr('text-anchor', 'middle').attr('font-size', 12.5).attr('font-weight', 600)
+      .attr('fill', 'var(--text-muted)')
+      .text(c === 0 ? '起点' : 'ホップ ' + c);
+  }
+
+  function showPropTooltip(ev, html) {
+    var rect = wrap.getBoundingClientRect();
+    tooltip.innerHTML = html;
+    tooltip.style.left = Math.max(0, ev.clientX - rect.left + 12) + 'px';
+    tooltip.style.top = (ev.clientY - rect.top + 12) + 'px';
+    tooltip.classList.remove('hidden');
+  }
+  function hidePropTooltip() { tooltip.classList.add('hidden'); }
+
+  // edges (drawn under the nodes)
+  var edgeLayer = root.append('g').attr('class', 'prop-edges');
+  edges.forEach(function (e) {
+    var x1 = e.child.x;                       // child left edge
+    var y1 = e.child.y + PROP_NODE_H / 2;
+    var x2 = e.parent.x + PROP_NODE_W + 2;    // parent right edge (arrow tip)
+    var y2 = e.parent.y + PROP_NODE_H / 2;
+    var mx = (x1 + x2) / 2;
+    var path = edgeLayer.append('path')
+      .attr('d', 'M' + x1 + ',' + y1 + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2)
+      .attr('fill', 'none')
+      .attr('stroke', e.isGroup ? PROP_EDGE_COLOR : propEdgeColor(e.via))
+      .attr('stroke-width', 1.6)
+      .attr('marker-end', 'url(#' + (propViaCategory(e.via) === 'dataflow' && !e.isGroup ? 'prop-arrow-df' : 'prop-arrow') + '-' + prefix + ')');
+    var dash = e.isGroup ? null : propEdgeDash(e.via);
+    if (dash) path.attr('stroke-dasharray', dash);
+    if (!e.isGroup) {
+      // wide invisible hit path for hover tooltip
+      edgeLayer.append('path')
+        .attr('d', path.attr('d'))
+        .attr('fill', 'none').attr('stroke', 'transparent').attr('stroke-width', 12)
+        .on('mousemove', function (ev) {
+          showPropTooltip(ev, escapeHtml(e.child.fid) + ' は ' + escapeHtml(e.parent.fid || '') + ' を参照 (' +
+            escapeHtml(e.via || '-') + (e.line ? ', 行' + e.line : '') + ')');
+        })
+        .on('mouseleave', hidePropTooltip);
+    }
+  });
+
+  // nodes
+  var nodeLayer = root.append('g').attr('class', 'prop-nodes');
+  var maxChars = Math.floor((PROP_NODE_W - 16) / 7);
+  rendered.forEach(function (n) {
+    var g = nodeLayer.append('g').attr('class', 'prop-node')
+      .attr('transform', 'translate(' + n.x + ',' + n.y + ')');
+    var isClickableNode = !n.group && !n.origin && spec.clickable && fileHasSource(n.fid);
+    var isGroupToggle = !!n.group;
+
+    var rect = g.append('rect')
+      .attr('width', PROP_NODE_W).attr('height', PROP_NODE_H)
+      .attr('rx', 8).attr('ry', 8);
+    var label;
+    if (n.group) {
+      rect.attr('fill', 'var(--grey-bg)').attr('stroke', 'var(--border-strong)')
+        .attr('stroke-width', 1.5).attr('stroke-dasharray', '4,3');
+      label = n.collapse ? '折りたたむ' : '+' + n.count + ' ファイル';
+    } else if (n.origin) {
+      rect.attr('fill', 'var(--accent)').attr('stroke', 'var(--accent-active)').attr('stroke-width', 2);
+      label = midEllipsize(basenameOf(n.fid), maxChars);
+    } else {
+      rect.attr('fill', '#fff').attr('stroke', n.confidence === 'certain' ? 'var(--accent)' : PROP_INFERRED_COLOR)
+        .attr('stroke-width', 2);
+      label = midEllipsize(basenameOf(n.fid), maxChars);
+    }
+    g.append('text')
+      .attr('x', PROP_NODE_W / 2).attr('y', PROP_NODE_H / 2)
+      .attr('text-anchor', 'middle').attr('dominant-baseline', 'central')
+      .attr('font-size', 12.5)
+      .attr('fill', n.origin ? '#fff' : 'var(--text)')
+      .style('pointer-events', 'none')
+      .text(label);
+    if (!n.group) g.append('title').text(n.fid);
+
+    // tooltips
+    if (!n.group) {
+      g.on('mousemove', function (ev) {
+        var html;
+        if (n.origin) {
+          html = escapeHtml(n.fid) + '<br>起点';
+        } else {
+          html = escapeHtml(n.fid) +
+            '<br>影響シンボル数: ' + n.symbolCount +
+            '<br>行: ' + (n.lines.length ? 'L' + n.lines.slice(0, 8).join(', L') + (n.lines.length > 8 ? ' 他' : '') : '-') +
+            '<br>信頼度: ' + confidenceLabelOf(n.confidence) +
+            '<br>via: ' + escapeHtml(n.via || '-');
+        }
+        showPropTooltip(ev, html);
+      }).on('mouseleave', hidePropTooltip);
+    }
+
+    // interactions (keyboard-focusable; svg <g role=button> avoids any
+    // nested-interactive structure -- nodes are siblings inside the svg)
+    var activate = null;
+    if (isGroupToggle) {
+      activate = function () {
+        if (spec.expandedCols.has(n.col)) spec.expandedCols.delete(n.col);
+        else spec.expandedCols.add(n.col);
+        renderPropagationDiagram(spec, visibleSet, prefix);
+      };
+      g.attr('tabindex', 0).attr('role', 'button')
+        .attr('aria-expanded', n.collapse ? 'true' : 'false')
+        .attr('aria-label', n.collapse ? 'ホップ' + n.col + 'の列を折りたたむ' : '残り' + n.count + 'ファイルを表示');
+    } else if (isClickableNode) {
+      activate = function () {
+        var lineSet = new Set(n.lines);
+        if (spec.ctx === 'sf') openSrcFlowAffectedFile(n.fid, lineSet);
+        else openPcAffectedFile(n.fid, lineSet);
+      };
+      g.attr('tabindex', 0).attr('role', 'button')
+        .attr('aria-label', n.fid + ' (ホップ' + n.hop + ', ' + confidenceLabelOf(n.confidence) + '), ソースを表示');
+    }
+    if (activate) {
+      g.style('cursor', 'pointer')
+        .on('click', function (ev) { ev.stopPropagation(); activate(); })
+        .on('keydown', function (ev) {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); activate(); }
+        });
+    }
+  });
 }
 
 /* ---- Shared traversal engine ----
@@ -3056,9 +3586,12 @@ function traceImpact(fileId, startLine, endLine, depth) {
   var fileFrontier = [fileId];
   var maxHopsReached = false;
 
-  function addAffected(fid, symbolId, line, confidence, via, hop) {
+  function addAffected(fid, symbolId, line, confidence, via, hop, parentFile) {
     if (!affectedByFile.has(fid)) affectedByFile.set(fid, []);
-    affectedByFile.get(fid).push({ symbol_id: symbolId, lines: line ? [line] : [], confidence: confidence, via: via, hops: hop });
+    affectedByFile.get(fid).push({
+      symbol_id: symbolId, lines: line ? [line] : [], confidence: confidence, via: via, hops: hop,
+      parent_file: parentFile || null
+    });
   }
 
   for (var hop = 1; hop <= depth; hop++) {
@@ -3068,6 +3601,11 @@ function traceImpact(fileId, startLine, endLine, depth) {
 
     symbolFrontier.forEach(function (symId) {
       var incoming = REV_CALL_MAP.get(symId) || [];
+      // The propagation diagram needs to know WHICH file's expansion first
+      // reached each affected file: for symbol edges that is the file that
+      // owns the symbol being called/inherited (symId).
+      var parentSym = SYMBOLS_BY_ID.get(symId);
+      var parentFile = parentSym ? parentSym.file_id : fileId;
       incoming.forEach(function (edge) {
         var conf = tagConfidence(edge, hop);
         var srcSym = SYMBOLS_BY_ID.get(edge.src);
@@ -3079,7 +3617,7 @@ function traceImpact(fileId, startLine, endLine, depth) {
           visitedSymbols.set(edge.src, hop);
           nextSymbolFrontier.push(edge.src);
           var srcFile = srcSym.file_id;
-          addAffected(srcFile, edge.src, edge.line, conf, edge.kind, hop);
+          addAffected(srcFile, edge.src, edge.line, conf, edge.kind, hop, parentFile);
           if (!visitedFiles.has(srcFile)) {
             visitedFiles.set(srcFile, hop);
             nextFileFrontier.push(srcFile);
@@ -3094,7 +3632,7 @@ function traceImpact(fileId, startLine, endLine, depth) {
         if (!visitedFiles.has(edge.src)) {
           visitedFiles.set(edge.src, hop);
           nextFileFrontier.push(edge.src);
-          addAffected(edge.src, '(module)', edge.line, conf, 'import', hop);
+          addAffected(edge.src, '(module)', edge.line, conf, 'import', hop, fid);
         }
       });
     });
@@ -3427,12 +3965,10 @@ function renderSrcFlowResult(fileId, startLine, endLine, depth, result) {
     impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
   html += renderAffectedFilesSection('sf', result.affected_files, true);
   html += unresolvedBoundariesHtml(result.unresolved_boundaries);
-  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-sf"></svg></div>';
+  html += '<div class="panel"><h2>影響伝播ダイアグラム</h2><div id="sf-propagation"></div></div>';
   el.innerHTML = html;
+  setupPropagationDiagram('sf', 'sf-propagation', 'sf', true, [fileId], result.affected_files);
   wireAffectedFilesSection('sf', result.affected_files, true, result, 'sf');
-  var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
-  highlighted.add(fileId);
-  renderMiniGraph('impact-mini-graph-sf', highlighted);
 }
 
 /* ---- Mode (b2): legacy fallback UI (no sources embedded at all) ---- */
@@ -3476,12 +4012,10 @@ function renderFallbackImpactResult(fileId, startLine, endLine, depth, result) {
     impactResultHeaderRows(fileId, startLine, endLine, depth, result) + '</table></div>';
   html += renderAffectedFilesSection('fb', result.affected_files, false);
   html += unresolvedBoundariesHtml(result.unresolved_boundaries);
-  html += '<div class="panel"><h2>影響範囲グラフ</h2><svg id="impact-mini-graph-fb"></svg></div>';
+  html += '<div class="panel"><h2>影響伝播ダイアグラム</h2><div id="fb-propagation"></div></div>';
   el.innerHTML = html;
+  setupPropagationDiagram('fb', 'fb-propagation', 'fb', false, [fileId], result.affected_files);
   wireAffectedFilesSection('fb', result.affected_files, false, result, 'fb');
-  var highlighted = new Set(result.affected_files.map(function (a) { return a.file_id; }));
-  highlighted.add(fileId);
-  renderMiniGraph('impact-mini-graph-fb', highlighted);
 }
 
 })();
